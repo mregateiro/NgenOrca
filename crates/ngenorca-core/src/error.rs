@@ -49,10 +49,40 @@ pub enum Error {
 
     #[error("{0}")]
     Other(String),
+
+    #[error("Provider unavailable: {0}")]
+    ProviderUnavailable(String),
+
+    #[error("Rate limited{}", .0.map(|d| format!(" (retry after {d:?})")).unwrap_or_default())]
+    RateLimited(Option<std::time::Duration>),
 }
 
 /// Convenience Result alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    /// Returns `true` if this error is likely transient and worth retrying.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Error::ProviderUnavailable(_)
+                | Error::RateLimited(_)
+                | Error::Timeout(_)
+                | Error::Io(_)
+        ) || match self {
+            Error::Gateway(msg) => {
+                // Treat common HTTP transient status codes as retryable.
+                msg.contains("429")
+                    || msg.contains("500")
+                    || msg.contains("502")
+                    || msg.contains("503")
+                    || msg.contains("timeout")
+                    || msg.contains("connection")
+            }
+            _ => false,
+        }
+    }
+}
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
@@ -136,5 +166,50 @@ mod tests {
         }
         assert_eq!(returns_ok().unwrap(), 42);
         assert!(returns_err().is_err());
+    }
+
+    #[test]
+    fn is_transient_for_provider_unavailable() {
+        assert!(Error::ProviderUnavailable("down".into()).is_transient());
+    }
+
+    #[test]
+    fn is_transient_for_rate_limited() {
+        assert!(Error::RateLimited(None).is_transient());
+        assert!(Error::RateLimited(Some(std::time::Duration::from_secs(5))).is_transient());
+    }
+
+    #[test]
+    fn is_transient_for_timeout() {
+        assert!(Error::Timeout(std::time::Duration::from_secs(10)).is_transient());
+    }
+
+    #[test]
+    fn is_transient_for_gateway_429() {
+        assert!(Error::Gateway("HTTP 429 Too Many Requests".into()).is_transient());
+    }
+
+    #[test]
+    fn is_not_transient_for_config() {
+        assert!(!Error::Config("bad".into()).is_transient());
+    }
+
+    #[test]
+    fn is_not_transient_for_unauthorized() {
+        assert!(!Error::Unauthorized("denied".into()).is_transient());
+    }
+
+    #[test]
+    fn rate_limited_display() {
+        let e = Error::RateLimited(None);
+        assert_eq!(e.to_string(), "Rate limited");
+        let e = Error::RateLimited(Some(std::time::Duration::from_secs(30)));
+        assert!(e.to_string().contains("retry after"));
+    }
+
+    #[test]
+    fn provider_unavailable_display() {
+        let e = Error::ProviderUnavailable("server error".into());
+        assert!(e.to_string().contains("server error"));
     }
 }

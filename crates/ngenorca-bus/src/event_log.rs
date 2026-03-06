@@ -203,6 +203,18 @@ impl EventLog {
             .map_err(|e| Error::Database(e.to_string()))?;
         Ok(count as u64)
     }
+
+    /// Delete events older than the given timestamp.
+    ///
+    /// Returns the number of deleted events.
+    pub fn prune_before(&self, older_than: chrono::DateTime<chrono::Utc>) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let cutoff = older_than.to_rfc3339();
+        let deleted = conn
+            .execute("DELETE FROM events WHERE timestamp < ?1", [&cutoff])
+            .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]

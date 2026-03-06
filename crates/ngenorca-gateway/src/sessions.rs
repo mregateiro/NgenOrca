@@ -161,6 +161,42 @@ impl SessionManager {
             .map(|s| s.len())
             .unwrap_or(0)
     }
+
+    /// Remove sessions that have been idle or ended for longer than `ttl`.
+    ///
+    /// Returns the number of pruned sessions.
+    pub fn prune_expired(&self, ttl: std::time::Duration) -> usize {
+        let cutoff = Utc::now() - chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1));
+
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+        let mut user_sessions = self.user_sessions.write().unwrap_or_else(|e| e.into_inner());
+
+        let expired_ids: Vec<SessionId> = sessions
+            .iter()
+            .filter(|(_, s)| s.last_active < cutoff)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let count = expired_ids.len();
+        for id in &expired_ids {
+            if let Some(session) = sessions.remove(id) {
+                // Clean up the user_sessions reverse map
+                let key = (
+                    session.user_id.map(|u| u.0).unwrap_or_default(),
+                    session.origin_channel.0.clone(),
+                );
+                if user_sessions.get(&key) == Some(id) {
+                    user_sessions.remove(&key);
+                }
+            }
+        }
+
+        if count > 0 {
+            info!(pruned = count, remaining = sessions.len(), "Pruned expired sessions");
+        }
+
+        count
+    }
 }
 
 #[cfg(test)]

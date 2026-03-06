@@ -204,15 +204,12 @@ impl ModelProvider for OpenAICompatProvider {
         let resp = req
             .send()
             .await
-            .map_err(|e| Error::Gateway(format!("{} list_models: {e}", self.provider_label)))?;
+            .map_err(|e| super::map_provider_transport_error(&self.provider_label, e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Gateway(format!(
-                "{} list_models HTTP {status}: {body}",
-                self.provider_label
-            )));
+            return Err(super::map_provider_http_error(&self.provider_label, status, body));
         }
 
         let models_resp: OpenAIModelsResponse = resp
@@ -271,21 +268,18 @@ impl ModelProvider for OpenAICompatProvider {
             .json(&openai_req)
             .send()
             .await
-            .map_err(|e| Error::Gateway(format!("{} chat: {e}", self.provider_label)))?;
+            .map_err(|e| super::map_provider_transport_error(&self.provider_label, e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            if let Ok(err) = serde_json::from_str::<OpenAIErrorResponse>(&body) {
-                return Err(Error::Gateway(format!(
-                    "{} HTTP {status}: {}",
-                    self.provider_label, err.error.message
-                )));
-            }
-            return Err(Error::Gateway(format!(
-                "{} HTTP {status}: {body}",
-                self.provider_label
-            )));
+            // Try to extract structured error message
+            let display_body = if let Ok(err) = serde_json::from_str::<OpenAIErrorResponse>(&body) {
+                err.error.message
+            } else {
+                body
+            };
+            return Err(super::map_provider_http_error(&self.provider_label, status, display_body));
         }
 
         let openai_resp: OpenAIChatResponse = resp

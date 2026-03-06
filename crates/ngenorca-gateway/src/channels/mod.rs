@@ -9,9 +9,21 @@
 //! Built-in adapters:
 //! - **WebChat** — served directly by the gateway (WebSocket), no adapter needed
 //! - **Telegram** — long-polling against the Telegram Bot API
+//! - **Discord** — Discord Bot via gateway events
+//! - **Slack** — Slack Bot (Socket Mode or Webhook)
+//! - **WhatsApp** — WhatsApp Cloud API
+//! - **Signal** — signal-cli JSON-RPC backend
+//! - **Matrix** — Matrix Client–Server API
+//! - **Teams** — Microsoft Bot Framework
 
+pub mod discord;
+pub mod matrix;
+pub mod signal;
+pub mod slack;
+pub mod teams;
 pub mod telegram;
 pub mod webchat;
+pub mod whatsapp;
 
 use crate::plugins::PluginRegistry;
 use ngenorca_config::NgenOrcaConfig;
@@ -60,8 +72,119 @@ pub async fn register_adapters(
         }
     }
 
-    // TODO: Discord, WhatsApp, Slack, Signal, Matrix, Teams adapters
-    // Each follows the same pattern: check config → create → register.
+    // Discord Bot adapter.
+    if let Some(dc) = &channels.discord {
+        if dc.enabled {
+            if let Some(token) = &dc.bot_token {
+                let adapter = discord::DiscordAdapter::new(
+                    token.clone(),
+                    dc.guild_ids.clone(),
+                    dc.command_prefix.clone().or_else(|| Some("!".into())),
+                );
+                let cfg_json = serde_json::to_value(dc).unwrap_or_default();
+                registry.register(Box::new(adapter), cfg_json).await?;
+                info!("Discord adapter registered");
+            } else {
+                tracing::warn!("Discord enabled but no bot_token configured — skipping");
+            }
+        }
+    }
+
+    // Slack Bot adapter.
+    if let Some(sl) = &channels.slack {
+        if sl.enabled {
+            if let Some(token) = &sl.bot_token {
+                let adapter = slack::SlackAdapter::new(
+                    token.clone(),
+                    sl.app_token.clone(),
+                    sl.socket_mode,
+                );
+                let cfg_json = serde_json::to_value(sl).unwrap_or_default();
+                registry.register(Box::new(adapter), cfg_json).await?;
+                info!("Slack adapter registered");
+            } else {
+                tracing::warn!("Slack enabled but no bot_token configured — skipping");
+            }
+        }
+    }
+
+    // WhatsApp Cloud API adapter.
+    if let Some(wa) = &channels.whatsapp {
+        if wa.enabled {
+            if let Some(token) = &wa.access_token {
+                let adapter = whatsapp::WhatsAppAdapter::new(
+                    wa.phone_number_id.clone().unwrap_or_default(),
+                    token.clone(),
+                    wa.verify_token.clone().unwrap_or_default(),
+                    wa.webhook_path.clone(),
+                );
+                let cfg_json = serde_json::to_value(wa).unwrap_or_default();
+                registry.register(Box::new(adapter), cfg_json).await?;
+                info!("WhatsApp adapter registered");
+            } else {
+                tracing::warn!("WhatsApp enabled but no access_token configured — skipping");
+            }
+        }
+    }
+
+    // Signal adapter (via signal-cli).
+    if let Some(sg) = &channels.signal {
+        if sg.enabled {
+            if let Some(phone) = &sg.phone_number {
+                let adapter = signal::SignalAdapter::new(
+                    phone.clone(),
+                    sg.signal_cli_path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "signal-cli".into()),
+                    sg.data_path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "/var/lib/signal-cli".into()),
+                    sg.mode.clone(),
+                );
+                let cfg_json = serde_json::to_value(sg).unwrap_or_default();
+                registry.register(Box::new(adapter), cfg_json).await?;
+                info!("Signal adapter registered");
+            } else {
+                tracing::warn!("Signal enabled but no phone_number configured — skipping");
+            }
+        }
+    }
+
+    // Matrix adapter.
+    if let Some(mx) = &channels.matrix {
+        if mx.enabled {
+            if let Some(token) = &mx.access_token {
+                let adapter = matrix::MatrixAdapter::new(
+                    mx.homeserver.clone().unwrap_or_else(|| "https://matrix.org".into()),
+                    mx.user_id.clone().unwrap_or_default().to_string(),
+                    token.clone(),
+                    mx.device_id.clone(),
+                    mx.auto_join,
+                    mx.encrypted,
+                );
+                let cfg_json = serde_json::to_value(mx).unwrap_or_default();
+                registry.register(Box::new(adapter), cfg_json).await?;
+                info!("Matrix adapter registered");
+            } else {
+                tracing::warn!("Matrix enabled but no access_token configured — skipping");
+            }
+        }
+    }
+
+    // Microsoft Teams adapter.
+    if let Some(tm) = &channels.teams {
+        if tm.enabled {
+            if let Some(app_id) = &tm.app_id {
+                let adapter = teams::TeamsAdapter::new(
+                    app_id.clone(),
+                    tm.app_password.clone().unwrap_or_default(),
+                    Some(tm.tenant_id.clone()),
+                    tm.webhook_url.clone(),
+                );
+                let cfg_json = serde_json::to_value(tm).unwrap_or_default();
+                registry.register(Box::new(adapter), cfg_json).await?;
+                info!("Teams adapter registered");
+            } else {
+                tracing::warn!("Teams enabled but no app_id configured — skipping");
+            }
+        }
+    }
 
     Ok(())
 }

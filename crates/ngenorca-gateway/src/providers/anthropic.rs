@@ -236,21 +236,18 @@ impl ModelProvider for AnthropicProvider {
             .json(&anthropic_req)
             .send()
             .await
-            .map_err(|e| Error::Gateway(format!("Anthropic request: {e}")))?;
+            .map_err(|e| super::map_provider_transport_error("Anthropic", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            // Try to parse error response
-            if let Ok(err) = serde_json::from_str::<AnthropicErrorResponse>(&body) {
-                return Err(Error::Gateway(format!(
-                    "Anthropic HTTP {status}: {}",
-                    err.error.message
-                )));
-            }
-            return Err(Error::Gateway(format!(
-                "Anthropic HTTP {status}: {body}"
-            )));
+            // Try to extract structured error message
+            let display_body = if let Ok(err) = serde_json::from_str::<AnthropicErrorResponse>(&body) {
+                err.error.message
+            } else {
+                body
+            };
+            return Err(super::map_provider_http_error("Anthropic", status, display_body));
         }
 
         let anthropic_resp: AnthropicMessagesResponse = resp

@@ -107,6 +107,14 @@ pub struct GatewayConfig {
     /// Path to CA certificate for mTLS client verification.
     #[serde(default)]
     pub tls_ca: Option<PathBuf>,
+
+    /// Rate limit: max requests per window per user (0 = disabled).
+    #[serde(default = "default_rate_limit_max")]
+    pub rate_limit_max: u32,
+
+    /// Rate limit window in seconds.
+    #[serde(default = "default_rate_limit_window_secs")]
+    pub rate_limit_window_secs: u64,
 }
 
 // ─── Agent / LLM Providers ──────────────────────────────────────
@@ -804,6 +812,8 @@ fn default_sub_agent_temperature() -> f64 { 0.3 }
 fn default_max_complexity() -> String { "Moderate".into() }
 fn default_cost_weight() -> u32 { 1 }
 fn default_priority() -> u32 { 10 }
+fn default_rate_limit_max() -> u32 { 60 }
+fn default_rate_limit_window_secs() -> u64 { 60 }
 fn default_webchat_theme() -> String { "dark".into() }
 fn default_upload_size() -> usize { 10 }
 fn default_whatsapp_webhook_path() -> String { "/webhooks/whatsapp".into() }
@@ -845,6 +855,8 @@ impl Default for GatewayConfig {
             tls_cert: None,
             tls_key: None,
             tls_ca: None,
+            rate_limit_max: default_rate_limit_max(),
+            rate_limit_window_secs: default_rate_limit_window_secs(),
         }
     }
 }
@@ -997,6 +1009,116 @@ impl NgenOrcaConfig {
             .into_iter()
             .min_by_key(|s| s.cost_weight)
     }
+
+    /// Validate the configuration, returning a list of problems.
+    ///
+    /// Returns `Ok(warnings)` when the config is usable (warnings are
+    /// non-fatal hints) or `Err(errors)` when the config has fatal issues.
+    pub fn validate(&self) -> std::result::Result<Vec<String>, Vec<String>> {
+        let mut errors: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+
+        // ── Gateway ──
+        if self.gateway.port == 0 {
+            errors.push("gateway.port must not be 0".into());
+        }
+        if self.gateway.bind.is_empty() {
+            errors.push("gateway.bind must not be empty".into());
+        }
+        if self.gateway.rate_limit_window_secs == 0 && self.gateway.rate_limit_max > 0 {
+            errors.push("gateway.rate_limit_window_secs must be > 0 when rate limiting is enabled".into());
+        }
+
+        // Auth-mode-specific
+        match &self.gateway.auth_mode {
+            AuthMode::Password => {
+                if self.gateway.auth_password.as_ref().is_none_or(|p| p.is_empty()) {
+                    errors.push("gateway.auth_password is required when auth_mode = Password".into());
+                }
+            }
+            AuthMode::Token => {
+                if self.gateway.auth_tokens.is_empty() {
+                    errors.push("gateway.auth_tokens must contain at least one token when auth_mode = Token".into());
+                }
+            }
+            AuthMode::Certificate => {
+                if self.gateway.tls_cert.is_none() {
+                    errors.push("gateway.tls_cert is required when auth_mode = Certificate".into());
+                }
+                if self.gateway.tls_key.is_none() {
+                    errors.push("gateway.tls_key is required when auth_mode = Certificate".into());
+                }
+            }
+            _ => {}
+        }
+
+        // ── Agent ──
+        if self.agent.model.is_empty() {
+            errors.push("agent.model must not be empty".into());
+        }
+
+        // Classifier thresholds
+        if let Some(cls) = &self.agent.classifier {
+            if !(0.0..=1.0).contains(&cls.confidence_threshold) {
+                errors.push(format!(
+                    "agent.classifier.confidence_threshold must be 0.0–1.0, got {}",
+                    cls.confidence_threshold
+                ));
+            }
+            if cls.temperature < 0.0 || cls.temperature > 2.0 {
+                errors.push(format!(
+                    "agent.classifier.temperature must be 0.0–2.0, got {}",
+                    cls.temperature
+                ));
+            }
+        }
+
+        // Quality gate
+        let valid_methods = ["heuristic", "slm", "llm", "auto"];
+        if !valid_methods.contains(&self.agent.quality_gate.method.as_str()) {
+            warnings.push(format!(
+                "agent.quality_gate.method '{}' is not one of {:?}",
+                self.agent.quality_gate.method, valid_methods
+            ));
+        }
+
+        // Sub-agent uniqueness
+        let mut seen_names = std::collections::HashSet::new();
+        for sa in &self.agent.sub_agents {
+            if !seen_names.insert(&sa.name) {
+                errors.push(format!("duplicate sub_agent name: '{}'", sa.name));
+            }
+            if sa.cost_weight == 0 {
+                warnings.push(format!(
+                    "sub_agent '{}' has cost_weight 0 — it will always be cheapest",
+                    sa.name
+                ));
+            }
+        }
+
+        // ── Channels ──
+        if let Some(tg) = &self.channels.telegram {
+            if tg.enabled && tg.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.telegram.bot_token is required when telegram is enabled".into());
+            }
+        }
+        if let Some(dc) = &self.channels.discord {
+            if dc.enabled && dc.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.discord.bot_token is required when discord is enabled".into());
+            }
+        }
+
+        // ── Memory ──
+        if self.memory.consolidation_interval_secs == 0 {
+            warnings.push("memory.consolidation_interval_secs is 0 — consolidation will run in a tight loop".into());
+        }
+
+        if errors.is_empty() {
+            Ok(warnings)
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 /// Load configuration by merging all sources in priority order.
@@ -1019,6 +1141,23 @@ pub fn load_config(config_path: Option<&str>) -> ngenorca_core::Result<NgenOrcaC
     let config: NgenOrcaConfig = figment
         .extract()
         .map_err(|e| ngenorca_core::Error::Config(e.to_string()))?;
+
+    // Validate the configuration.
+    match config.validate() {
+        Ok(warnings) => {
+            for w in &warnings {
+                tracing::warn!("Config warning: {w}");
+            }
+        }
+        Err(errors) => {
+            for e in &errors {
+                tracing::error!("Config error: {e}");
+            }
+            return Err(ngenorca_core::Error::Config(
+                format!("Configuration has {} error(s): {}", errors.len(), errors.join("; "))
+            ));
+        }
+    }
 
     let (provider, model) = config.parse_model();
     let channels = config.enabled_channels();
@@ -1332,5 +1471,122 @@ mod tests {
         let cfg = SandboxConfig::default();
         assert!(cfg.enabled);
         assert!(matches!(cfg.backend, SandboxBackend::Auto));
+    }
+
+    // ── Validation tests ──
+
+    #[test]
+    fn default_config_validates_ok() {
+        let cfg = NgenOrcaConfig::default();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_catches_zero_port() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.port = 0;
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("port")));
+    }
+
+    #[test]
+    fn validate_catches_empty_bind() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.bind = String::new();
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("bind")));
+    }
+
+    #[test]
+    fn validate_catches_missing_auth_password() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.auth_mode = AuthMode::Password;
+        cfg.gateway.auth_password = None;
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("auth_password")));
+    }
+
+    #[test]
+    fn validate_catches_empty_auth_tokens() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.auth_mode = AuthMode::Token;
+        cfg.gateway.auth_tokens = vec![];
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("auth_tokens")));
+    }
+
+    #[test]
+    fn validate_catches_missing_tls_cert() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.auth_mode = AuthMode::Certificate;
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("tls_cert")));
+        assert!(errs.iter().any(|e| e.contains("tls_key")));
+    }
+
+    #[test]
+    fn validate_catches_empty_model() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.model = String::new();
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("agent.model")));
+    }
+
+    #[test]
+    fn validate_catches_bad_confidence_threshold() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.classifier = Some(ClassifierConfig {
+            model: "test/model".into(),
+            confidence_threshold: 1.5,
+            max_tokens: 100,
+            temperature: 0.5,
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("confidence_threshold")));
+    }
+
+    #[test]
+    fn validate_catches_duplicate_sub_agent_names() {
+        let mut cfg = NgenOrcaConfig::default();
+        let sa = SubAgentConfig {
+            name: "dup".into(),
+            model: "ollama/llama3".into(),
+            roles: vec!["general".into()],
+            system_prompt: None,
+            max_tokens: 2048,
+            temperature: 0.3,
+            max_complexity: "Moderate".into(),
+            is_local: true,
+            cost_weight: 1,
+            priority: 10,
+        };
+        cfg.agent.sub_agents = vec![sa.clone(), sa];
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("duplicate sub_agent")));
+    }
+
+    #[test]
+    fn validate_warns_zero_consolidation_interval() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.memory.consolidation_interval_secs = 0;
+        let warnings = cfg.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("consolidation_interval")));
+    }
+
+    #[test]
+    fn validate_warns_unknown_quality_gate_method() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.quality_gate.method = "unknown_method".into();
+        let warnings = cfg.validate().unwrap();
+        assert!(warnings.iter().any(|w| w.contains("quality_gate.method")));
+    }
+
+    #[test]
+    fn validate_catches_rate_limit_zero_window() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.rate_limit_max = 100;
+        cfg.gateway.rate_limit_window_secs = 0;
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("rate_limit_window_secs")));
     }
 }

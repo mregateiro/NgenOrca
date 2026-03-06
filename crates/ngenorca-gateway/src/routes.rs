@@ -40,6 +40,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/chat", post(chat))
         .route("/api/v1/sessions", get(list_sessions))
         .route("/ws", get(ws_handler))
+        .route("/metrics", get(metrics_endpoint))
         .with_state(state)
 }
 
@@ -396,6 +397,8 @@ async fn chat(
     Extension(caller): Extension<CallerIdentity>,
     Json(body): Json<ChatRequest>,
 ) -> Json<serde_json::Value> {
+    state.metrics().inc_http_requests();
+
     if body.message.trim().is_empty() {
         return Json(json!({ "error": "message cannot be empty" }));
     }
@@ -517,6 +520,12 @@ async fn chat(
         .await
     {
         Ok((response, record)) => {
+            state.metrics().inc_orchestrations();
+            state.metrics().add_tokens(response.total_usage.total_tokens as u64);
+            if response.escalated {
+                state.metrics().inc_escalations();
+            }
+
             // Ingest orchestration record into learned routing rules
             if let Err(e) = state.learned_router().ingest(&record) {
                 warn!(error = %e, "Failed to ingest learned routing rule");
@@ -590,6 +599,7 @@ async fn chat(
             }))
         }
         Err(e) => {
+            state.metrics().inc_http_errors();
             error!(error = %e, "Chat orchestration failed");
             Json(json!({ "error": e.to_string() }))
         }
@@ -622,6 +632,13 @@ async fn list_sessions(
         "active_sessions": session_list,
         "total": state.sessions().total_sessions(),
     }))
+}
+
+// ─── Metrics ────────────────────────────────────────────────────
+
+/// GET /metrics — Prometheus-compatible metrics endpoint.
+async fn metrics_endpoint(State(state): State<AppState>) -> String {
+    state.metrics().render_prometheus()
 }
 
 // ─── WebSocket Handler ──────────────────────────────────────────
@@ -659,7 +676,11 @@ async fn ws_handler(
 }
 
 async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIdentity) {
+    state.metrics().inc_ws_connections();
     let (mut sender, mut receiver) = socket.split();
+
+    // Subscribe to real-time events from the bus for push notifications.
+    let mut event_rx = state.event_bus().subscribe();
 
     let user_id = caller.username.as_ref()
         .filter(|u| !u.is_empty())
@@ -684,173 +705,265 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
         let _ = sender.send(WsMessage::Text(json.into())).await;
     }
 
-    while let Some(msg) = receiver.next().await {
-        let msg = match msg {
-            Ok(WsMessage::Text(text)) => text,
-            Ok(WsMessage::Close(_)) => {
-                info!(user = %display_user, "WebSocket closed by client");
-                break;
-            }
-            Ok(_) => continue, // Ignore binary, ping, pong
-            Err(e) => {
-                warn!(error = %e, "WebSocket error");
-                break;
-            }
-        };
-
-        // Parse the incoming message
-        let ws_msg: WsChatMessage = match serde_json::from_str(&msg) {
-            Ok(m) => m,
-            Err(e) => {
-                let err_resp = WsChatResponse {
-                    msg_type: "error".into(),
-                    content: None,
-                    session_id: None,
-                    served_by: None,
-                    error: Some(format!("Invalid message format: {e}")),
-                    latency_ms: None,
+    loop {
+        tokio::select! {
+            // Arm 1: Inbound messages from the WebSocket client
+            client_msg = receiver.next() => {
+                let msg = match client_msg {
+                    Some(Ok(WsMessage::Text(text))) => text,
+                    Some(Ok(WsMessage::Close(_))) => {
+                        info!(user = %display_user, "WebSocket closed by client");
+                        break;
+                    }
+                    Some(Ok(_)) => continue, // Ignore binary, ping, pong
+                    Some(Err(e)) => {
+                        warn!(error = %e, "WebSocket error");
+                        break;
+                    }
+                    None => break, // Stream ended
                 };
-                if let Ok(json) = serde_json::to_string(&err_resp) {
-                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                }
-                continue;
-            }
-        };
 
-        if ws_msg.message.trim().is_empty() {
-            continue;
-        }
-
-        // Get or create session
-        let session_id = match state
-            .sessions()
-            .get_or_create(user_id.as_ref(), "websocket")
-        {
-            Ok(sid) => sid,
-            Err(e) => {
-                let err_resp = WsChatResponse {
-                    msg_type: "error".into(),
-                    content: None,
-                    session_id: None,
-                    served_by: None,
-                    error: Some(format!("Session error: {e}")),
-                    latency_ms: None,
-                };
-                if let Ok(json) = serde_json::to_string(&err_resp) {
-                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                }
-                continue;
-            }
-        };
-
-        // Send "thinking" indicator
-        let thinking = WsChatResponse {
-            msg_type: "thinking".into(),
-            content: None,
-            session_id: Some(session_id.to_string()),
-            served_by: None,
-            error: None,
-            latency_ms: None,
-        };
-        if let Ok(json) = serde_json::to_string(&thinking) {
-            let _ = sender.send(WsMessage::Text(json.into())).await;
-        }
-
-        // Store in working memory
-        state.memory().working.push(
-            &session_id,
-            ngenorca_memory::working::WorkingMessage {
-                role: "user".into(),
-                content: ws_msg.message.clone(),
-                timestamp: chrono::Utc::now(),
-                estimated_tokens: ws_msg.message.len() / 4,
-            },
-        );
-
-        // Build conversation from working memory
-        let working_messages = state.memory().working.get_session(&session_id);
-        let conversation: Vec<ChatMessage> = working_messages
-            .iter()
-            .rev()
-            .skip(1) // Skip the message we just added (it will be the current message)
-            .rev()
-            .map(|wm| ChatMessage {
-                role: wm.role.clone(),
-                content: wm.content.clone(),
-            })
-            .collect();
-
-        // Orchestrate
-        let orch = HybridOrchestrator::new(Arc::new(state.config().clone()));
-
-        let response = match orch
-            .process(&ws_msg.message, &conversation, state.providers(), Some(state.plugins()), None)
-            .await
-        {
-            Ok((resp, record)) => {
-                // Ingest into learned routing
-                if let Err(e) = state.learned_router().ingest(&record) {
-                    warn!(error = %e, "Failed to ingest WS learned routing rule");
-                }
-
-                // Publish orchestration record
-                let orch_event = ngenorca_core::event::Event {
-                    id: ngenorca_core::types::EventId::new(),
-                    timestamp: chrono::Utc::now(),
-                    session_id: Some(session_id.clone()),
-                    user_id: None,
-                    payload: ngenorca_core::event::EventPayload::OrchestrationCompleted(record),
-                };
-                if let Err(e) = state.event_bus().publish(orch_event).await {
-                    warn!(error = %e, "Failed to publish WS orchestration record");
-                }
-
-                // Store assistant response in working memory
-                state.memory().working.push(
-                    &session_id,
-                    ngenorca_memory::working::WorkingMessage {
-                        role: "assistant".into(),
-                        content: resp.content.clone(),
-                        timestamp: chrono::Utc::now(),
-                        estimated_tokens: resp.content.len() / 4,
-                    },
-                );
-
-                let _ = state
-                    .sessions()
-                    .record_message(&session_id, resp.total_usage.total_tokens);
-
-                WsChatResponse {
-                    msg_type: "response".into(),
-                    content: Some(resp.content),
-                    session_id: Some(session_id.to_string()),
-                    served_by: Some(format!(
-                        "{}/{}",
-                        resp.served_by.name, resp.served_by.model
-                    )),
-                    error: None,
-                    latency_ms: Some(resp.latency_ms),
+                state.metrics().inc_ws_messages_in();
+                if let Err(done) = handle_client_message(
+                    &msg, &state, &mut sender, user_id.as_ref(), display_user,
+                ).await {
+                    if done {
+                        break;
+                    }
                 }
             }
-            Err(e) => {
-                error!(error = %e, "WebSocket chat failed");
-                WsChatResponse {
-                    msg_type: "error".into(),
-                    content: None,
-                    session_id: Some(session_id.to_string()),
-                    served_by: None,
-                    error: Some(e.to_string()),
-                    latency_ms: None,
-                }
-            }
-        };
 
-        if let Ok(json) = serde_json::to_string(&response) {
-            if sender.send(WsMessage::Text(json.into())).await.is_err() {
-                break;
+            // Arm 2: Events pushed from the EventBus (broadcast to all WS clients)
+            event = event_rx.recv() => {
+                match event {
+                    Ok(bus_event) => {
+                        let ws_event = WsEventPush {
+                            msg_type: "event".into(),
+                            event_id: bus_event.id.to_string(),
+                            event_kind: event_payload_kind(&bus_event.payload),
+                            session_id: bus_event.session_id.as_ref().map(|s| s.to_string()),
+                            payload: serde_json::to_value(&bus_event.payload).ok(),
+                            timestamp: bus_event.timestamp.to_rfc3339(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&ws_event) {
+                            if sender.send(WsMessage::Text(json.into())).await.is_err() {
+                                break; // Client disconnected
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(lagged = n, "WS event subscriber lagged, skipping events");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        info!("Event bus closed, ending WS push");
+                        break;
+                    }
+                }
             }
         }
     }
 
     info!(user = %display_user, "WebSocket connection closed");
+}
+
+/// Process a single inbound client message. Returns `Err(true)` if the
+/// connection should be closed, `Err(false)` if the message was handled
+/// (but the caller should `continue`), and `Ok(())` on success.
+async fn handle_client_message(
+    raw: &str,
+    state: &AppState,
+    sender: &mut futures::stream::SplitSink<WebSocket, WsMessage>,
+    user_id: Option<&UserId>,
+    _display_user: &str,
+) -> std::result::Result<(), bool> {
+    // Parse the incoming message
+    let ws_msg: WsChatMessage = match serde_json::from_str(raw) {
+        Ok(m) => m,
+        Err(e) => {
+            let err_resp = WsChatResponse {
+                msg_type: "error".into(),
+                content: None,
+                session_id: None,
+                served_by: None,
+                error: Some(format!("Invalid message format: {e}")),
+                latency_ms: None,
+            };
+            if let Ok(json) = serde_json::to_string(&err_resp) {
+                let _ = sender.send(WsMessage::Text(json.into())).await;
+            }
+            return Err(false);
+        }
+    };
+
+    if ws_msg.message.trim().is_empty() {
+        return Err(false);
+    }
+
+    // Get or create session
+    let session_id = match state
+        .sessions()
+        .get_or_create(user_id, "websocket")
+    {
+        Ok(sid) => sid,
+        Err(e) => {
+            let err_resp = WsChatResponse {
+                msg_type: "error".into(),
+                content: None,
+                session_id: None,
+                served_by: None,
+                error: Some(format!("Session error: {e}")),
+                latency_ms: None,
+            };
+            if let Ok(json) = serde_json::to_string(&err_resp) {
+                let _ = sender.send(WsMessage::Text(json.into())).await;
+            }
+            return Err(false);
+        }
+    };
+
+    // Send "thinking" indicator
+    let thinking = WsChatResponse {
+        msg_type: "thinking".into(),
+        content: None,
+        session_id: Some(session_id.to_string()),
+        served_by: None,
+        error: None,
+        latency_ms: None,
+    };
+    if let Ok(json) = serde_json::to_string(&thinking) {
+        let _ = sender.send(WsMessage::Text(json.into())).await;
+    }
+
+    // Store in working memory
+    state.memory().working.push(
+        &session_id,
+        ngenorca_memory::working::WorkingMessage {
+            role: "user".into(),
+            content: ws_msg.message.clone(),
+            timestamp: chrono::Utc::now(),
+            estimated_tokens: ws_msg.message.len() / 4,
+        },
+    );
+
+    // Build conversation from working memory
+    let working_messages = state.memory().working.get_session(&session_id);
+    let conversation: Vec<ChatMessage> = working_messages
+        .iter()
+        .rev()
+        .skip(1) // Skip the message we just added (it will be the current message)
+        .rev()
+        .map(|wm| ChatMessage {
+            role: wm.role.clone(),
+            content: wm.content.clone(),
+        })
+        .collect();
+
+    // Orchestrate
+    let orch = HybridOrchestrator::new(Arc::new(state.config().clone()));
+
+    let response = match orch
+        .process(&ws_msg.message, &conversation, state.providers(), Some(state.plugins()), None)
+        .await
+    {
+        Ok((resp, record)) => {
+            state.metrics().inc_orchestrations();
+            state.metrics().add_tokens(resp.total_usage.total_tokens as u64);
+            if resp.escalated {
+                state.metrics().inc_escalations();
+            }
+
+            // Ingest into learned routing
+            if let Err(e) = state.learned_router().ingest(&record) {
+                warn!(error = %e, "Failed to ingest WS learned routing rule");
+            }
+
+            // Publish orchestration record
+            let orch_event = ngenorca_core::event::Event {
+                id: ngenorca_core::types::EventId::new(),
+                timestamp: chrono::Utc::now(),
+                session_id: Some(session_id.clone()),
+                user_id: None,
+                payload: ngenorca_core::event::EventPayload::OrchestrationCompleted(record),
+            };
+            if let Err(e) = state.event_bus().publish(orch_event).await {
+                warn!(error = %e, "Failed to publish WS orchestration record");
+            }
+
+            // Store assistant response in working memory
+            state.memory().working.push(
+                &session_id,
+                ngenorca_memory::working::WorkingMessage {
+                    role: "assistant".into(),
+                    content: resp.content.clone(),
+                    timestamp: chrono::Utc::now(),
+                    estimated_tokens: resp.content.len() / 4,
+                },
+            );
+
+            let _ = state
+                .sessions()
+                .record_message(&session_id, resp.total_usage.total_tokens);
+
+            WsChatResponse {
+                msg_type: "response".into(),
+                content: Some(resp.content),
+                session_id: Some(session_id.to_string()),
+                served_by: Some(format!(
+                    "{}/{}",
+                    resp.served_by.name, resp.served_by.model
+                )),
+                error: None,
+                latency_ms: Some(resp.latency_ms),
+            }
+        }
+        Err(e) => {
+            state.metrics().inc_http_errors();
+            error!(error = %e, "WebSocket chat failed");
+            WsChatResponse {
+                msg_type: "error".into(),
+                content: None,
+                session_id: Some(session_id.to_string()),
+                served_by: None,
+                error: Some(e.to_string()),
+                latency_ms: None,
+            }
+        }
+    };
+
+    if let Ok(json) = serde_json::to_string(&response) {
+        if sender.send(WsMessage::Text(json.into())).await.is_err() {
+            return Err(true); // Client disconnected
+        }
+    }
+
+    Ok(())
+}
+
+/// WebSocket push notification for bus events.
+#[derive(Debug, Serialize)]
+struct WsEventPush {
+    msg_type: String,
+    event_id: String,
+    event_kind: String,
+    session_id: Option<String>,
+    payload: Option<serde_json::Value>,
+    timestamp: String,
+}
+
+/// Return a human-readable kind label for an EventPayload.
+fn event_payload_kind(payload: &ngenorca_core::event::EventPayload) -> String {
+    use ngenorca_core::event::EventPayload;
+    match payload {
+        EventPayload::Message(_) => "message",
+        EventPayload::SessionCreated { .. } => "session_created",
+        EventPayload::SessionEnded { .. } => "session_ended",
+        EventPayload::PluginLoaded { .. } => "plugin_loaded",
+        EventPayload::PluginUnloaded { .. } => "plugin_unloaded",
+        EventPayload::IdentityChange { .. } => "identity_change",
+        EventPayload::MemoryUpdate { .. } => "memory_update",
+        EventPayload::ToolExecution { .. } => "tool_execution",
+        EventPayload::SystemLifecycle(_) => "system_lifecycle",
+        EventPayload::OrchestrationCompleted(_) => "orchestration_completed",
+    }
+    .into()
 }

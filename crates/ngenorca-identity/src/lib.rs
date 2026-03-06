@@ -20,7 +20,7 @@ use tracing::info;
 
 /// The identity manager — resolves who is talking from any surface.
 pub struct IdentityManager {
-    store: IdentityStore,
+    pub(crate) store: IdentityStore,
 }
 
 impl IdentityManager {

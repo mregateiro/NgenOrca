@@ -32,10 +32,15 @@ auth_mode = "None"
 # Password mode:
 # auth_password = "my-strong-password"
 
-# TLS (for Certificate mode or direct HTTPS):
+# TLS (for Certificate mode — requires a TLS-terminating reverse proxy;
+# the gateway itself binds plain TCP and delegates TLS to nginx/Caddy/etc.):
 # tls_cert = "/path/to/cert.pem"
 # tls_key = "/path/to/key.pem"
 # tls_ca = "/path/to/ca.pem"
+
+# Rate limiting (per-user sliding window). Set rate_limit_max = 0 to disable.
+# rate_limit_max = 60               # max requests per window
+# rate_limit_window_secs = 60       # window duration in seconds
 
 # ── Agent / LLM ─────────────────────────────────────────────────
 [agent]

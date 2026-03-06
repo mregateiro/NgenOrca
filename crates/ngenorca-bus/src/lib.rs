@@ -85,6 +85,11 @@ impl EventBus {
     pub fn event_count(&self) -> Result<u64> {
         self.inner.log.count()
     }
+
+    /// Access the underlying event log for maintenance operations (e.g., pruning).
+    pub fn event_log(&self) -> &EventLog {
+        &self.inner.log
+    }
 }
 
 #[cfg(test)]

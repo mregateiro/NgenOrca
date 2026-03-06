@@ -200,12 +200,22 @@ impl ProviderRegistry {
     }
 
     /// Complete a chat request, automatically routing to the correct provider.
+    ///
+    /// Retries up to 3 times on transient failures with exponential backoff.
     pub async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         let provider = self.resolve(&request.model)?;
-        provider.chat_completion(request).await
+        let label = request.model.clone();
+        let retry_cfg = super::retry::RetryConfig::default();
+
+        super::retry::retry_with_backoff(&retry_cfg, &label, || {
+            let req = request.clone();
+            let prov = provider.clone();
+            async move { prov.chat_completion(req).await }
+        })
+        .await
     }
 
     /// List all models from all providers.

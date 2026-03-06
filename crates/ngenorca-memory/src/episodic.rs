@@ -96,8 +96,19 @@ impl EpisodicMemory {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Search episodic memory by text (full-text search fallback).
-    /// When embeddings are available, this will use cosine similarity instead.
+    /// Search episodic memory using term-overlap scoring with recency weighting.
+    ///
+    /// When embedding vectors are available for both query and stored entries,
+    /// cosine similarity is used. Otherwise a heuristic term-overlap scoring
+    /// is applied:
+    ///
+    /// 1. The query is tokenised into lowercase keywords (≥ 2 chars).
+    /// 2. All entries for the user are fetched (limited to a scan window).
+    /// 3. Each entry is scored by:
+    ///    - **term_score**: fraction of query keywords found in the entry
+    ///    - **recency_score**: exponential decay based on age (half-life 7 days)
+    ///    - **combined**: `0.7 * term_score + 0.3 * recency_score`
+    /// 4. Entries with combined score > 0.05 are returned, sorted descending.
     pub fn search(
         &self,
         user_id: &UserId,
@@ -107,47 +118,90 @@ impl EpisodicMemory {
     ) -> Result<Vec<EpisodicEntry>> {
         let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
 
-        // TODO: When embedding model is available, use vector similarity search.
-        // For now, fall back to LIKE-based text search + recency weighting.
-        let search_pattern = format!("%{query}%");
+        // Tokenise query into lowercase terms (≥ 2 chars, deduplicated).
+        let query_terms: Vec<String> = tokenize(query);
+        if query_terms.is_empty() {
+            return Ok(vec![]);
+        }
 
+        // Fetch a generous scan window (up to 500 entries, most recent first).
+        let scan_limit = 500i64;
         let mut stmt = conn
             .prepare(
-                "SELECT id, user_id, content, summary, channel, timestamp
+                "SELECT id, user_id, content, summary, channel, timestamp, embedding
                  FROM episodic_entries
-                 WHERE user_id = ?1 AND content LIKE ?2
+                 WHERE user_id = ?1
                  ORDER BY timestamp DESC
-                 LIMIT ?3",
+                 LIMIT ?2",
             )
             .map_err(|e| Error::Database(e.to_string()))?;
 
-        let entries = stmt
-            .query_map(params![user_id.0, search_pattern, limit as i64], |row| {
+        let now = Utc::now();
+        let half_life_secs: f64 = 7.0 * 24.0 * 3600.0; // 7 days
+
+        let mut scored: Vec<EpisodicEntry> = stmt
+            .query_map(params![user_id.0, scan_limit], |row| {
                 let id: i64 = row.get(0)?;
-                let user_id: String = row.get(1)?;
+                let uid: String = row.get(1)?;
                 let content: String = row.get(2)?;
                 let summary: Option<String> = row.get(3)?;
                 let channel: String = row.get(4)?;
-                let timestamp: String = row.get(5)?;
-                Ok((id, user_id, content, summary, channel, timestamp))
+                let ts_str: String = row.get(5)?;
+                let emb_blob: Option<Vec<u8>> = row.get(6)?;
+                Ok((id, uid, content, summary, channel, ts_str, emb_blob))
             })
             .map_err(|e| Error::Database(e.to_string()))?
             .filter_map(|r| r.ok())
-            .map(|(id, user_id, content, summary, channel, timestamp)| EpisodicEntry {
-                id,
-                user_id,
-                content,
-                summary,
-                channel,
-                timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
+            .filter_map(|(id, uid, content, summary, channel, ts_str, emb_blob)| {
+                let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
                     .unwrap_or_default()
-                    .with_timezone(&Utc),
-                embedding: None,
-                relevance_score: 0.0,
+                    .with_timezone(&Utc);
+
+                let embedding: Option<Vec<f32>> = emb_blob.map(|blob| {
+                    blob.chunks_exact(4)
+                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect()
+                });
+
+                // Term-overlap score.
+                let content_lower = content.to_lowercase();
+                let summary_lower = summary.as_deref().unwrap_or("").to_lowercase();
+                let haystack = format!("{content_lower} {summary_lower}");
+                let matched = query_terms.iter().filter(|t| haystack.contains(t.as_str())).count();
+                let term_score = matched as f64 / query_terms.len() as f64;
+
+                // Recency score: exponential decay with 7-day half-life.
+                let age_secs = (now - timestamp).num_seconds().max(0) as f64;
+                let recency_score = (-age_secs * (2.0_f64.ln()) / half_life_secs).exp();
+
+                // Require at least one query term to match.
+                if matched == 0 {
+                    return None;
+                }
+
+                let combined = 0.7 * term_score + 0.3 * recency_score;
+
+                if combined > 0.05 {
+                    Some(EpisodicEntry {
+                        id,
+                        user_id: uid,
+                        content,
+                        summary,
+                        channel,
+                        timestamp,
+                        embedding,
+                        relevance_score: combined,
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
 
-        Ok(entries)
+        // Sort by relevance (descending).
+        scored.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
     }
 
     /// Get recent entries for a user (for consolidation into semantic memory).
@@ -253,6 +307,16 @@ impl EpisodicMemory {
             .collect();
         Ok(users)
     }
+}
+
+/// Tokenise text into lowercase keywords (≥ 2 chars, deduplicated).
+fn tokenize(text: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() >= 2)
+        .filter(|w| seen.insert(w.clone()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -422,5 +486,61 @@ mod tests {
         let removed = em.prune(&uid, 10).unwrap();
         assert_eq!(removed, 0);
         assert_eq!(em.count(&uid).unwrap(), 1);
+    }
+
+    // ── Term-overlap search tests ───────────────────────────────
+
+    #[test]
+    fn search_scores_by_term_overlap() {
+        let em = mem();
+        let uid = UserId("u1".into());
+        em.store(&make_entry("u1", "I love Rust programming", "cli")).unwrap();
+        em.store(&make_entry("u1", "Rust is great for systems", "cli")).unwrap();
+        em.store(&make_entry("u1", "Python scripting", "cli")).unwrap();
+
+        // "Rust programming" has 2 query terms; entry 1 matches both, entry 2 matches one
+        let results = em.search(&uid, "Rust programming", 10, 10000).unwrap();
+        assert!(results.len() >= 2, "should match entries containing Rust");
+        // First result should have the highest relevance (matches both terms)
+        assert!(results[0].relevance_score >= results[1].relevance_score);
+        assert!(results[0].content.contains("programming"));
+    }
+
+    #[test]
+    fn search_returns_empty_for_no_match() {
+        let em = mem();
+        let uid = UserId("u1".into());
+        em.store(&make_entry("u1", "hello world", "cli")).unwrap();
+        let results = em.search(&uid, "quantum physics", 10, 10000).unwrap();
+        // "quantum" and "physics" don't appear → entries filtered out
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_empty_query_returns_empty() {
+        let em = mem();
+        let uid = UserId("u1".into());
+        em.store(&make_entry("u1", "hello", "cli")).unwrap();
+        // Single-char words are rejected by tokenizer (< 2 chars)
+        let results = em.search(&uid, "a", 10, 10000).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_scores_include_summary() {
+        let em = mem();
+        let uid = UserId("u1".into());
+        let mut entry = make_entry("u1", "general conversation", "cli");
+        entry.summary = Some("discussed Kubernetes deployment".to_string());
+        em.store(&entry).unwrap();
+        let results = em.search(&uid, "Kubernetes", 10, 10000).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].relevance_score > 0.05);
+    }
+
+    #[test]
+    fn tokenize_deduplicates_and_lowercases() {
+        let tokens = super::tokenize("Rust rust RUST hello Hello");
+        assert_eq!(tokens, vec!["rust".to_string(), "hello".to_string()]);
     }
 }

@@ -69,11 +69,17 @@ impl MemoryManager {
         // Tier 1: Working memory — current session context.
         let working_messages = self.working.get_session(session_id);
 
+        // Estimate total tokens (rough heuristic: ~4 chars per token).
+        let semantic_tokens = semantic_facts.iter().map(|f| f.fact.len()).sum::<usize>() / 4;
+        let episodic_tokens = episodic_results.iter().map(|e| e.content.len()).sum::<usize>() / 4;
+        let working_tokens = working_messages.iter().map(|m| m.content.len()).sum::<usize>() / 4;
+        let total_estimated_tokens = semantic_tokens + episodic_tokens + working_tokens;
+
         Ok(ContextPack {
             semantic_block: semantic_facts,
             episodic_snippets: episodic_results,
             working_messages,
-            total_estimated_tokens: 0, // TODO: token counting
+            total_estimated_tokens,
         })
     }
 

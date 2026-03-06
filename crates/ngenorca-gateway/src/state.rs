@@ -1,5 +1,6 @@
 //! Shared application state accessible from all route handlers.
 
+use crate::metrics::Metrics;
 use crate::orchestration::LearnedRouter;
 use crate::plugins::PluginRegistry;
 use crate::providers::ProviderRegistry;
@@ -25,6 +26,7 @@ struct AppStateInner {
     pub sessions: SessionManager,
     pub plugins: PluginRegistry,
     pub learned_router: LearnedRouter,
+    pub metrics: Metrics,
     pub start_time: std::time::Instant,
 }
 
@@ -38,6 +40,7 @@ impl AppState {
         sessions: SessionManager,
         plugins: PluginRegistry,
         learned_router: LearnedRouter,
+        metrics: Metrics,
     ) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
@@ -49,6 +52,7 @@ impl AppState {
                 sessions,
                 plugins,
                 learned_router,
+                metrics,
                 start_time: std::time::Instant::now(),
             }),
         }
@@ -86,6 +90,10 @@ impl AppState {
         &self.inner.learned_router
     }
 
+    pub fn metrics(&self) -> &Metrics {
+        &self.inner.metrics
+    }
+
     pub fn uptime(&self) -> std::time::Duration {
         self.inner.start_time.elapsed()
     }
@@ -96,10 +104,17 @@ mod tests {
     use super::*;
 
     async fn make_state() -> AppState {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let config = NgenOrcaConfig::default();
         let event_bus = EventBus::new(":memory:").await.unwrap();
         let identity = IdentityManager::new(":memory:").unwrap();
-        let temp_dir = std::env::temp_dir().join(format!("ngenorca_test_{}", std::process::id()));
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ngenorca_test_{}_{unique}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
         let providers = ProviderRegistry::from_config(&config);
@@ -110,7 +125,8 @@ mod tests {
         let (plugin_tx, _plugin_rx) = tokio::sync::mpsc::unbounded_channel();
         let plugins = PluginRegistry::new(plugin_tx, std::path::PathBuf::from("/tmp/test_plugins"));
         let learned_router = LearnedRouter::new(":memory:").unwrap();
-        AppState::new(config, event_bus, identity, memory, providers, sessions, plugins, learned_router)
+        let metrics = Metrics::new();
+        AppState::new(config, event_bus, identity, memory, providers, sessions, plugins, learned_router, metrics)
     }
 
     #[tokio::test]

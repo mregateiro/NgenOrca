@@ -61,8 +61,11 @@ cargo build --release
 ### Docker
 
 ```bash
+cp .env.example .env           # Fill in your API keys
 docker compose up -d
 ```
+
+See [docs/DOCKER.md](docs/DOCKER.md) for the full step-by-step guide (config, Ollama, auth, troubleshooting).
 
 ### NAS / Homelab (with Authelia + nginx)
 
@@ -176,6 +179,7 @@ Guides:
 | Endpoint | Description |
 |---|---|
 | `GET /health` | Health check (no auth) |
+| `GET /metrics` | Prometheus-compatible metrics |
 | `GET /api/v1/status` | System status + caller identity |
 | `GET /api/v1/whoami` | Show authenticated user (verify Authelia flow) |
 | `GET /api/v1/providers` | Configured LLM providers |
@@ -183,6 +187,8 @@ Guides:
 | `GET /api/v1/identity/users` | Registered users |
 | `GET /api/v1/memory/stats` | Memory system statistics |
 | `GET /api/v1/events/count` | Event log count |
+| `POST /api/v1/chat` | Send a chat message |
+| `WS /ws` | WebSocket (chat + real‑time event push) |
 
 ## CLI Commands
 
@@ -241,9 +247,27 @@ NgenOrca/
 ```bash
 cargo build                      # Build all crates
 cargo check --workspace          # Check compilation
-cargo test --workspace           # Run tests
+cargo test --workspace           # Run tests (~320 tests)
 cargo run -p ngenorca-cli -- gateway --verbose
 ```
+
+### CI/CD
+
+GitHub Actions workflows in `.github/workflows/`:
+
+- **ci.yml** — Format, clippy, test (Linux/macOS/Windows), build, Docker build
+- **release.yml** — Cross-compile binaries, multi-arch Docker image, GitHub Release
+
+### Operational Features
+
+| Feature | Description |
+|---|---|
+| **Rate Limiting** | Per-user sliding window (configurable `rate_limit_max` / `rate_limit_window_secs`) |
+| **Metrics** | Prometheus-compatible endpoint at `/metrics` (HTTP, WS, orchestration, token counters) |
+| **Retry with Backoff** | Transient provider errors (429, 500, 503, timeout) auto-retry up to 3× with exponential backoff |
+| **Config Validation** | Pre-flight checks for ports, auth credentials, model names, thresholds, duplicate sub-agents |
+| **Graceful Shutdown** | Ctrl+C / SIGTERM → drain in-flight requests → shutdown plugins → clean exit |
+| **Ed25519 Device Signing** | Hardware-bound identity verification with `ring` Ed25519 signatures |
 
 ## License
 

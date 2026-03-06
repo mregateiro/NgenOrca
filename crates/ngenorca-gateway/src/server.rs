@@ -1,6 +1,7 @@
 //! HTTP/WebSocket server startup.
 
 use crate::auth;
+use crate::rate_limit::RateLimiterState;
 use crate::routes;
 use crate::state::AppState;
 use axum::middleware;
@@ -19,8 +20,27 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
         (p.to_owned(), m.to_owned())
     };
 
+    let limiter = RateLimiterState::with_metrics(
+        state.config().gateway.rate_limit_max,
+        state.config().gateway.rate_limit_window_secs,
+        state.metrics().clone(),
+    );
+    let rate_limit_info = if state.config().gateway.rate_limit_max > 0 {
+        format!(
+            "{} req / {}s",
+            state.config().gateway.rate_limit_max,
+            state.config().gateway.rate_limit_window_secs,
+        )
+    } else {
+        "disabled".into()
+    };
+
     let state_for_middleware = state.clone();
     let app = routes::router(state)
+        .layer(middleware::from_fn_with_state(
+            limiter,
+            crate::rate_limit::rate_limit_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state_for_middleware,
             auth::auth_middleware,
@@ -28,6 +48,10 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
+    // NOTE: The gateway binds plain TCP. TLS termination is delegated to a
+    // reverse proxy (nginx, Caddy, Traefik, etc.). The tls_cert/tls_key fields
+    // in config are used only for mTLS client-certificate auth validation at
+    // the proxy layer, not by this server.
     let addr = format!("{bind}:{port}");
     let listener = TcpListener::bind(&addr)
         .await
@@ -35,6 +59,7 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
 
     info!("NgenOrca gateway listening on {}", addr);
     info!("  Auth:      {}", auth_mode);
+    info!("  RateLimit: {}", rate_limit_info);
     info!("  Provider:  {}/{}", provider, model);
     info!("  Channels:  {:?}", channels);
     info!("  Health:    http://{}/health", addr);
@@ -44,8 +69,35 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
     info!("  Whoami:    http://{}/api/v1/whoami", addr);
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| Error::Gateway(format!("Server error: {e}")))?;
 
+    info!("Server stopped");
     Ok(())
+}
+
+/// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => { info!("Received Ctrl+C, shutting down gracefully…"); },
+        () = terminate => { info!("Received SIGTERM, shutting down gracefully…"); },
+    }
 }

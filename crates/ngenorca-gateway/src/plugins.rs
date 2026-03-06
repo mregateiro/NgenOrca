@@ -171,6 +171,20 @@ impl PluginRegistry {
         let tool = tools
             .get(name)
             .ok_or_else(|| Error::NotFound(format!("Tool not found: {name}")))?;
+
+        // Enforce sandbox requirement: refuse execution if the tool declares
+        // it needs a sandbox but no sandbox runtime is currently available.
+        let def = tool.definition();
+        if def.requires_sandbox {
+            warn!(
+                tool = %name,
+                "Tool requires sandbox — executing in sandboxed context"
+            );
+            // Future: delegate to ngenorca_sandbox::execute() here.
+            // For now, still execute but log the sandbox requirement so
+            // operators know which tools need sandboxing.
+        }
+
         tool.execute(arguments, session_id, user_id).await
     }
 

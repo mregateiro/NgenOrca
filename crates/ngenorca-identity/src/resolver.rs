@@ -32,27 +32,100 @@ pub enum IdentityAction {
 }
 
 /// Resolve identity from a device-signed message.
+///
+/// If the device is known **and** `signature` + `message_bytes` are non-empty,
+/// the signature is verified against the stored public key (base64-encoded
+/// Ed25519 in `DeviceBinding.public_key_hash`). Verification failure downgrades
+/// the result to `Challenge`.
+///
+/// When `signature` is empty the device is still resolved (backward compat),
+/// but trust is capped at `TrustLevel::Channel`.
 pub fn resolve_from_device(
     manager: &IdentityManager,
     device_id: &DeviceId,
-    _signature: &[u8],
-    _message_bytes: &[u8],
+    signature: &[u8],
+    message_bytes: &[u8],
 ) -> Result<ResolvedIdentity> {
-    // TODO: Verify the signature against the stored public key.
-    // For now, just look up the device binding.
-
     match manager.resolve_by_device(device_id)? {
-        Some((user_id, trust)) => Ok(ResolvedIdentity {
-            user_id: Some(user_id),
-            trust,
-            action: IdentityAction::Proceed,
-        }),
+        Some((user_id, stored_trust)) => {
+            // If no signature provided, accept but at reduced trust.
+            if signature.is_empty() || message_bytes.is_empty() {
+                let trust = stored_trust.min(TrustLevel::Channel);
+                return Ok(ResolvedIdentity {
+                    user_id: Some(user_id),
+                    trust,
+                    action: IdentityAction::ProceedReduced,
+                });
+            }
+
+            // Attempt to verify the signature.
+            let identity = manager
+                .store
+                .find_by_device(device_id)?
+                .expect("device was just resolved");
+
+            let device = identity
+                .devices
+                .iter()
+                .find(|d| d.device_id == *device_id)
+                .expect("device binding exists");
+
+            match verify_device_signature(&device.public_key_hash, signature, message_bytes) {
+                Ok(true) => Ok(ResolvedIdentity {
+                    user_id: Some(user_id),
+                    trust: stored_trust,
+                    action: IdentityAction::Proceed,
+                }),
+                Ok(false) => {
+                    tracing::warn!(
+                        device_id = %device_id.0,
+                        "Signature verification failed"
+                    );
+                    Ok(ResolvedIdentity {
+                        user_id: Some(user_id),
+                        trust: TrustLevel::Unknown,
+                        action: IdentityAction::Challenge,
+                    })
+                }
+                Err(_) => {
+                    // Key decode error — treat as verification failure.
+                    tracing::warn!(
+                        device_id = %device_id.0,
+                        "Public key decode failed, challenging device"
+                    );
+                    Ok(ResolvedIdentity {
+                        user_id: Some(user_id),
+                        trust: TrustLevel::Unknown,
+                        action: IdentityAction::Challenge,
+                    })
+                }
+            }
+        }
         None => Ok(ResolvedIdentity {
             user_id: None,
             trust: TrustLevel::Unknown,
             action: IdentityAction::RequirePairing,
         }),
     }
+}
+
+/// Verify an Ed25519 signature against a base64-encoded public key.
+///
+/// Returns `Ok(true)` if the signature is valid, `Ok(false)` if the
+/// signature is invalid, and `Err` if the public key cannot be decoded.
+fn verify_device_signature(
+    public_key_b64: &str,
+    signature: &[u8],
+    message: &[u8],
+) -> std::result::Result<bool, base64::DecodeError> {
+    use base64::Engine;
+    use ring::signature;
+
+    let pub_bytes = base64::engine::general_purpose::STANDARD.decode(public_key_b64)?;
+    let public_key =
+        signature::UnparsedPublicKey::new(&signature::ED25519, &pub_bytes);
+
+    Ok(public_key.verify(message, signature).is_ok())
 }
 
 /// Resolve identity from a channel handle (WhatsApp number, Telegram ID, etc).
@@ -108,20 +181,121 @@ mod tests {
         mgr
     }
 
-    #[test]
-    fn resolve_from_known_device() {
-        let mgr = setup();
-        let result = resolve_from_device(&mgr, &DeviceId("dev-1".into()), &[], &[]).unwrap();
-        assert_eq!(result.user_id, Some(UserId("alice".into())));
-        assert_eq!(result.action, IdentityAction::Proceed);
+    /// Helper: pair a device with a real Ed25519 public key.
+    fn setup_with_ed25519() -> (IdentityManager, ring::signature::Ed25519KeyPair) {
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
+
+        let mgr = IdentityManager::new(":memory:").unwrap();
+        let uid = UserId("bob".into());
+        mgr.register_user(uid.clone(), "Bob".into(), UserRole::Owner)
+            .unwrap();
+
+        // Generate an Ed25519 keypair.
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+
+        // Store the base64-encoded public key as `public_key_hash`.
+        use base64::Engine;
+        let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+
+        let device = ngenorca_core::identity::DeviceBinding {
+            device_id: DeviceId("dev-ed25519".into()),
+            device_name: "Test Device".into(),
+            attestation: ngenorca_core::identity::AttestationType::CompositeFingerprint,
+            public_key_hash: pub_b64,
+            trust: TrustLevel::Hardware,
+            paired_at: chrono::Utc::now(),
+            last_used: chrono::Utc::now(),
+        };
+        mgr.pair_device(&uid, device).unwrap();
+
+        (mgr, key_pair)
     }
 
     #[test]
-    fn resolve_from_unknown_device() {
+    fn resolve_from_known_device_no_signature_proceeds_reduced() {
+        let mgr = setup();
+        let result = resolve_from_device(&mgr, &DeviceId("dev-1".into()), &[], &[]).unwrap();
+        assert_eq!(result.user_id, Some(UserId("alice".into())));
+        assert_eq!(result.action, IdentityAction::ProceedReduced);
+        // Trust capped at Channel (min of Hardware, Channel).
+        assert_eq!(result.trust, TrustLevel::Channel);
+    }
+
+    #[test]
+    fn resolve_unknown_device() {
         let mgr = setup();
         let result = resolve_from_device(&mgr, &DeviceId("unknown".into()), &[], &[]).unwrap();
         assert!(result.user_id.is_none());
         assert_eq!(result.action, IdentityAction::RequirePairing);
+        assert_eq!(result.trust, TrustLevel::Unknown);
+    }
+
+    #[test]
+    fn resolve_valid_ed25519_signature_proceeds() {
+        let (mgr, key_pair) = setup_with_ed25519();
+        let message = b"hello NgenOrca";
+        let sig = key_pair.sign(message);
+
+        let result = resolve_from_device(
+            &mgr,
+            &DeviceId("dev-ed25519".into()),
+            sig.as_ref(),
+            message,
+        )
+        .unwrap();
+
+        assert_eq!(result.user_id, Some(UserId("bob".into())));
+        assert_eq!(result.trust, TrustLevel::Hardware);
+        assert_eq!(result.action, IdentityAction::Proceed);
+    }
+
+    #[test]
+    fn resolve_invalid_signature_challenges() {
+        let (mgr, _key_pair) = setup_with_ed25519();
+        let message = b"hello NgenOrca";
+        let bad_sig = vec![0u8; 64]; // wrong signature
+
+        let result = resolve_from_device(
+            &mgr,
+            &DeviceId("dev-ed25519".into()),
+            &bad_sig,
+            message,
+        )
+        .unwrap();
+
+        assert_eq!(result.user_id, Some(UserId("bob".into())));
+        assert_eq!(result.trust, TrustLevel::Unknown);
+        assert_eq!(result.action, IdentityAction::Challenge);
+    }
+
+    #[test]
+    fn resolve_corrupt_public_key_challenges() {
+        let mgr = IdentityManager::new(":memory:").unwrap();
+        let uid = UserId("carol".into());
+        mgr.register_user(uid.clone(), "Carol".into(), UserRole::Owner).unwrap();
+
+        let device = ngenorca_core::identity::DeviceBinding {
+            device_id: DeviceId("dev-bad-key".into()),
+            device_name: "BadKey".into(),
+            attestation: ngenorca_core::identity::AttestationType::CompositeFingerprint,
+            public_key_hash: "not-valid-base64!!!".into(),
+            trust: TrustLevel::Hardware,
+            paired_at: chrono::Utc::now(),
+            last_used: chrono::Utc::now(),
+        };
+        mgr.pair_device(&uid, device).unwrap();
+
+        let result = resolve_from_device(
+            &mgr,
+            &DeviceId("dev-bad-key".into()),
+            b"fake-sig",
+            b"message",
+        )
+        .unwrap();
+
+        assert_eq!(result.action, IdentityAction::Challenge);
         assert_eq!(result.trust, TrustLevel::Unknown);
     }
 
@@ -147,5 +321,37 @@ mod tests {
         assert_eq!(IdentityAction::Proceed, IdentityAction::Proceed);
         assert_ne!(IdentityAction::Proceed, IdentityAction::Block);
         assert_ne!(IdentityAction::RequirePairing, IdentityAction::Challenge);
+    }
+
+    #[test]
+    fn verify_device_signature_valid() {
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
+        use base64::Engine;
+
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+
+        let msg = b"test message";
+        let sig = key_pair.sign(msg);
+
+        assert!(verify_device_signature(&pub_b64, sig.as_ref(), msg).unwrap());
+    }
+
+    #[test]
+    fn verify_device_signature_invalid() {
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
+        use base64::Engine;
+
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+
+        let msg = b"test message";
+        let wrong_sig = vec![0u8; 64];
+
+        assert!(!verify_device_signature(&pub_b64, &wrong_sig, msg).unwrap());
     }
 }

@@ -10,9 +10,11 @@
 
 pub mod auth;
 pub mod channels;
+pub mod metrics;
 pub mod orchestration;
 pub mod plugins;
 pub mod providers;
+pub mod rate_limit;
 pub mod routes;
 pub mod server;
 pub mod sessions;
@@ -94,6 +96,9 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         learned_db_path.to_str().unwrap_or("learned_routes.db"),
     )?;
 
+    // Initialize metrics registry.
+    let metrics_registry = metrics::Metrics::new();
+
     // Build shared application state.
     let app_state = state::AppState::new(
         config.clone(),
@@ -104,6 +109,7 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         sessions,
         plugin_registry,
         learned_router,
+        metrics_registry,
     );
 
     // Register channel adapters from config.
@@ -134,16 +140,21 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
 
                 for user_id in users {
                     let uid = ngenorca_core::types::UserId(user_id);
-                    if let Err(e) = state.memory().consolidate_for_user(
+                    match state.memory().consolidate_for_user(
                         &uid,
                         chrono::Duration::hours(24),
                         max_episodes,
                     ) {
-                        tracing::warn!(
-                            user = %uid,
-                            error = %e,
-                            "Memory consolidation failed for user"
-                        );
+                        Ok(_) => {
+                            state.metrics().inc_consolidations();
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                user = %uid,
+                                error = %e,
+                                "Memory consolidation failed for user"
+                            );
+                        }
                     }
                 }
             }
@@ -154,8 +165,54 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         );
     }
 
-    // Start the HTTP/WebSocket server.
-    server::run(app_state, &config.gateway.bind, config.gateway.port).await?;
+    // Spawn background session pruning task (every 5 minutes, TTL = 2 hours).
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            interval.tick().await; // Skip immediate first tick
+            loop {
+                interval.tick().await;
+                let pruned = state.sessions().prune_expired(std::time::Duration::from_secs(7200));
+                if pruned > 0 {
+                    tracing::debug!(pruned, "Session pruning cycle complete");
+                }
+            }
+        });
+        info!("Session pruning task started (every 5m, TTL 2h)");
+    }
+
+    // Spawn background event log pruning task (every 6 hours, retain 7 days).
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+            interval.tick().await; // Skip immediate first tick
+            loop {
+                interval.tick().await;
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+                match state.event_bus().event_log().prune_before(cutoff) {
+                    Ok(deleted) => {
+                        if deleted > 0 {
+                            tracing::info!(deleted, "Event log pruning complete");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Event log pruning failed");
+                    }
+                }
+            }
+        });
+        info!("Event log pruning task started (every 6h, retain 7d)");
+    }
+
+    // Start the HTTP/WebSocket server (blocks until shutdown signal).
+    server::run(app_state.clone(), &config.gateway.bind, config.gateway.port).await?;
+
+    // Graceful cleanup.
+    info!("Shutting down plugins…");
+    app_state.plugins().shutdown_all().await;
+    info!("All plugins stopped. Goodbye.");
 
     Ok(())
 }

@@ -159,14 +159,12 @@ impl ModelProvider for OllamaProvider {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Gateway(format!("Ollama list_models: {e}")))?;
+            .map_err(|e| super::map_provider_transport_error("Ollama", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Gateway(format!(
-                "Ollama list_models HTTP {status}: {body}"
-            )));
+            return Err(super::map_provider_http_error("Ollama", status, body));
         }
 
         let tags: OllamaTagsResponse = resp
@@ -221,14 +219,12 @@ impl ModelProvider for OllamaProvider {
             .json(&ollama_req)
             .send()
             .await
-            .map_err(|e| Error::Gateway(format!("Ollama chat: {e}")))?;
+            .map_err(|e| super::map_provider_transport_error("Ollama", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Gateway(format!(
-                "Ollama chat HTTP {status}: {body}"
-            )));
+            return Err(super::map_provider_http_error("Ollama", status, body));
         }
 
         let ollama_resp: OllamaChatResponse = resp
