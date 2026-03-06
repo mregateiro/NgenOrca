@@ -1,0 +1,72 @@
+# NgenOrca — NAS / Homelab Deployment
+#
+# Designed for: Synology, QNAP, Unraid, TrueNAS, Raspberry Pi, or any Linux server
+# Access via:   WireGuard VPN → nginx → Authelia (2FA) → NgenOrca
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in your secrets
+#   2. Copy deploy/nginx/ngenorca.conf to your nginx sites-enabled
+#   3. Add the Authelia access_control rule (see docs/NAS_DEPLOYMENT.md)
+#   4. docker compose -f docker-compose.nas.yml up -d
+#
+# API keys and bot tokens NEVER leave this machine.
+
+services:
+  ngenorca:
+    build: .
+    image: ngenorca/ngenorca:latest
+    container_name: ngenorca
+    restart: unless-stopped
+    networks:
+      - proxy                          # Same network as your nginx + Authelia
+    expose:
+      - "18789"                        # NOT "ports:" — only visible inside Docker network
+    volumes:
+      - ngenorca-data:/var/lib/ngenorca
+      - ./config:/etc/ngenorca:ro
+    environment:
+      # ── Gateway ──
+      NGENORCA_GATEWAY__BIND: "0.0.0.0"
+      NGENORCA_GATEWAY__PORT: "18789"
+      NGENORCA_GATEWAY__AUTH_MODE: "TrustedProxy"
+      NGENORCA_GATEWAY__PROXY_USER_HEADER: "Remote-User"
+      NGENORCA_GATEWAY__PROXY_EMAIL_HEADER: "Remote-Email"
+      NGENORCA_GATEWAY__PROXY_GROUPS_HEADER: "Remote-Groups"
+
+      # ── Agent / LLM ──
+      NGENORCA_AGENT__MODEL: "${NGENORCA_MODEL:-anthropic/claude-sonnet-4-20250514}"
+      NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY: "${ANTHROPIC_API_KEY}"
+      NGENORCA_AGENT__PROVIDERS__OPENAI__API_KEY: "${OPENAI_API_KEY:-}"
+      NGENORCA_AGENT__PROVIDERS__OLLAMA__BASE_URL: "${OLLAMA_URL:-http://host.docker.internal:11434}"
+
+      # ── Channels ──
+      NGENORCA_CHANNELS__TELEGRAM__ENABLED: "${TELEGRAM_ENABLED:-false}"
+      NGENORCA_CHANNELS__TELEGRAM__BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      NGENORCA_CHANNELS__TELEGRAM__POLLING: "true"
+      NGENORCA_CHANNELS__DISCORD__ENABLED: "${DISCORD_ENABLED:-false}"
+      NGENORCA_CHANNELS__DISCORD__BOT_TOKEN: "${DISCORD_BOT_TOKEN:-}"
+
+      # ── Identity ──
+      NGENORCA_IDENTITY__REQUIRE_HARDWARE_ATTESTATION: "false"
+      NGENORCA_IDENTITY__AUTO_LOCK_MINUTES: "0"
+
+      # ── Sandbox ──
+      NGENORCA_SANDBOX__BACKEND: "Container"
+
+      # ── Observability ──
+      NGENORCA_OBSERVABILITY__LOG_LEVEL: "${LOG_LEVEL:-info}"
+      NGENORCA_OBSERVABILITY__JSON_LOGS: "true"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  proxy:
+    external: true                     # The network your nginx/Authelia already use
+
+volumes:
+  ngenorca-data:
+    driver: local

@@ -1,0 +1,249 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  NgenOrca Configuration                                        ║
+# ║  Place at: ~/.ngenorca/config.toml                              ║
+# ║  Env vars: NGENORCA_SECTION__FIELD=value (double underscore)    ║
+# ║  Guide:    docs/CONFIGURATION_GUIDE.md                          ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+# ── Data Directory ───────────────────────────────────────────────
+# data_dir = "~/.ngenorca/data"
+
+# ── Gateway ──────────────────────────────────────────────────────
+[gateway]
+bind = "127.0.0.1"                 # "0.0.0.0" to expose to network
+port = 18789
+
+# Authentication mode:
+#   None         — No auth (loopback only or fully trusted network)
+#   TrustedProxy — Reverse proxy does auth (Authelia/Authentik + nginx)
+#   Token        — Bearer token in Authorization header
+#   Password     — Basic auth
+#   Certificate  — mTLS client certificates
+auth_mode = "None"
+
+# TrustedProxy settings (used when auth_mode = "TrustedProxy"):
+# proxy_user_header = "Remote-User"      # Header name for username
+# proxy_email_header = "Remote-Email"    # Header name for email
+# proxy_groups_header = "Remote-Groups"  # Header name for groups
+
+# Token mode:
+# auth_tokens = ["my-secret-token-1", "my-secret-token-2"]
+
+# Password mode:
+# auth_password = "my-strong-password"
+
+# TLS (for Certificate mode or direct HTTPS):
+# tls_cert = "/path/to/cert.pem"
+# tls_key = "/path/to/key.pem"
+# tls_ca = "/path/to/ca.pem"
+
+# ── Agent / LLM ─────────────────────────────────────────────────
+[agent]
+model = "anthropic/claude-sonnet-4-20250514"
+# thinking_level = "Medium"        # Off | Minimal | Low | Medium | High | Max
+# workspace = "~/.ngenorca/workspace"
+
+# ── Multi-Agent Orchestration ────────────────────────────────────
+# Routing strategy:
+#   Single        — All requests go to primary model (default, no sub-agents)
+#   RuleBased     — Static rules: intent → sub-agent
+#   LocalFirst    — Try local SLM first, escalate to cloud if quality is low
+#   CostOptimized — Always pick the cheapest model that can handle the task
+#   LlmRouted     — The primary LLM decides which sub-agent to use
+#   Hybrid        — Rules → SLM classifier → LLM (recommended for multi-agent)
+# routing = "Single"
+
+# Lightweight SLM classifier for intent detection (used by Hybrid routing):
+# [agent.classifier]
+# model = "ollama/qwen2.5:1.5b"
+# confidence_threshold = 0.8       # Below this, escalates to LLM classification
+# max_tokens = 64
+# temperature = 0.1
+
+# Quality gate — evaluates if sub-agent responses are good enough:
+# [agent.quality_gate]
+# enabled = true
+# method = "auto"                  # heuristic | slm | llm | auto
+# min_response_length = 10
+# max_escalations = 2              # Max retries before giving up
+# auto_accept_learned = true       # Skip quality gate for learned routing rules
+
+# ── Sub-Agents ───────────────────────────────────────────────────
+# Define sub-agents the orchestrator can delegate to.
+# Each sub-agent has a name, model, roles, and tuning parameters.
+# The orchestrator dynamically generates system prompts for each task.
+
+# Example: Local general-purpose SLM (handles 80-90% of daily tasks)
+# [[agent.sub_agents]]
+# name = "local-general"
+# model = "ollama/llama3.1:8b"
+# roles = ["General", "Summarization", "Translation", "QuestionAnswering"]
+# system_prompt = "You are a helpful assistant. Be concise and accurate."
+# max_tokens = 1024
+# temperature = 0.3
+# max_complexity = "Moderate"       # Trivial | Simple | Moderate | Complex | Expert
+# is_local = true
+# cost_weight = 1                   # 1 = cheapest
+# priority = 1                      # Lower = preferred when multiple agents match
+
+# Example: Code specialist SLM
+# [[agent.sub_agents]]
+# name = "coder"
+# model = "ollama/codellama:13b"
+# roles = ["Coding", "Extraction"]
+# system_prompt = "You are an expert programmer. Use code blocks. Be precise."
+# max_tokens = 4096
+# temperature = 0.2
+# max_complexity = "Complex"
+# is_local = true
+# cost_weight = 2
+# priority = 1
+
+# Example: Cloud LLM for deep analysis (used when SLMs can't handle it)
+# [[agent.sub_agents]]
+# name = "deep-thinker"
+# model = "anthropic/claude-sonnet-4-20250514"
+# roles = ["Analysis", "Planning", "Creative", "Reasoning"]
+# max_tokens = 8192
+# temperature = 0.5
+# max_complexity = "Expert"
+# is_local = false
+# cost_weight = 8
+# priority = 10
+
+# Anthropic (Claude)
+# [agent.providers.anthropic]
+# api_key = "sk-ant-..."           # Or set NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY
+# base_url = "https://api.anthropic.com"
+# max_tokens = 8192
+# temperature = 0.7
+
+# OpenAI (GPT)
+# [agent.providers.openai]
+# api_key = "sk-proj-..."          # Or set NGENORCA_AGENT__PROVIDERS__OPENAI__API_KEY
+# base_url = "https://api.openai.com/v1"
+# organization = "org-..."
+# max_tokens = 4096
+# temperature = 0.7
+
+# Ollama (local models — no API key needed)
+# [agent.providers.ollama]
+# base_url = "http://127.0.0.1:11434"
+# keep_alive = "5m"                # How long to keep model in VRAM
+# num_ctx = 8192                   # Context window size
+
+# Azure OpenAI
+# [agent.providers.azure]
+# api_key = "your-azure-key"
+# endpoint = "https://your-resource.openai.azure.com"
+# api_version = "2024-10-21"
+# deployment = "my-gpt4o-deployment"
+
+# Google Gemini
+# [agent.providers.google]
+# api_key = "AIza..."
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+# OpenRouter (200+ models, one API key)
+# [agent.providers.openrouter]
+# api_key = "sk-or-v1-..."
+# base_url = "https://openrouter.ai/api/v1"
+# site_name = "NgenOrca"
+# fallback_models = ["openrouter/openai/gpt-4o", "openrouter/google/gemini-2.0-flash"]
+
+# Custom / self-hosted (vLLM, LM Studio, LocalAI, etc.)
+# [agent.providers.custom]
+# base_url = "http://192.168.1.100:8080/v1"
+# api_key = "not-needed"
+# model_name = "my-finetuned-model"
+
+# ── Channels ─────────────────────────────────────────────────────
+
+# WebChat (built-in, served by gateway)
+[channels.webchat]
+enabled = true
+# theme = "dark"                   # dark | light | auto
+# max_upload_size_mb = 10
+
+# Telegram
+# [channels.telegram]
+# enabled = true
+# bot_token = "7123456789:AAH..."  # Or set NGENORCA_CHANNELS__TELEGRAM__BOT_TOKEN
+# polling = true                   # true = long polling (no public URL needed)
+# webhook_url = "https://your-domain.com/webhooks/telegram"   # For webhook mode
+# allowed_users = [123456789]      # Restrict to specific Telegram user IDs
+
+# Discord
+# [channels.discord]
+# enabled = true
+# bot_token = "MTIz..."            # Or set NGENORCA_CHANNELS__DISCORD__BOT_TOKEN
+# application_id = "123456789"
+# guild_ids = ["111111111"]        # Restrict to specific servers
+# allowed_roles = ["Admin"]
+# command_prefix = "!"
+
+# WhatsApp (Business Cloud API — requires HTTPS webhook)
+# [channels.whatsapp]
+# enabled = true
+# phone_number_id = "1234567890"
+# access_token = "EAAx..."
+# verify_token = "my-secret-verify-token"
+# webhook_path = "/webhooks/whatsapp"
+# app_secret = "abc123..."
+
+# Slack
+# [channels.slack]
+# enabled = true
+# bot_token = "xoxb-..."
+# app_token = "xapp-..."          # For Socket Mode
+# signing_secret = "abc123..."
+# socket_mode = true               # No public URL needed
+# channel_ids = ["C01234567"]
+
+# Signal (via signal-cli)
+# [channels.signal]
+# enabled = true
+# phone_number = "+1234567890"
+# signal_cli_path = "/usr/local/bin/signal-cli"
+# mode = "daemon"                  # daemon | dbus
+
+# Matrix
+# [channels.matrix]
+# enabled = true
+# homeserver = "https://matrix.org"
+# user_id = "@ngenorca:matrix.org"
+# access_token = "syt_..."
+# auto_join = true
+# encrypted = true
+
+# Microsoft Teams
+# [channels.teams]
+# enabled = true
+# app_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# app_password = "your-bot-secret"
+# tenant_id = "common"
+
+# ── Identity ─────────────────────────────────────────────────────
+[identity]
+require_hardware_attestation = true
+biometrics_enabled = false
+auto_lock_minutes = 30             # 0 = disabled
+
+# ── Memory ───────────────────────────────────────────────────────
+[memory]
+enabled = true
+episodic_max_entries = 100000
+consolidation_interval_secs = 3600
+semantic_token_budget = 4096
+
+# ── Sandbox ──────────────────────────────────────────────────────
+[sandbox]
+# backend = "Auto"                 # Auto | WindowsJob | LinuxSeccomp | MacOsSandbox | Container | None
+enabled = true
+
+# ── Observability ────────────────────────────────────────────────
+[observability]
+otlp_enabled = false
+# otlp_endpoint = "http://localhost:4317"
+log_level = "info"
+json_logs = false

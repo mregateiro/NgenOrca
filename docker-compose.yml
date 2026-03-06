@@ -1,0 +1,73 @@
+# NgenOrca — Docker Compose
+#
+# Quick start:     docker compose up -d
+# NAS / homelab:   docker compose -f docker-compose.nas.yml up -d
+#
+# All-in-one mode: runs the core gateway with adapters in one container.
+# Split mode:      uncomment individual adapter services below.
+
+services:
+  # ── Core Gateway ──────────────────────────────────────────────
+  core:
+    build: .
+    image: ngenorca/ngenorca:latest
+    container_name: ngenorca
+    restart: unless-stopped
+    ports:
+      - "18789:18789"
+    volumes:
+      - ngenorca-data:/var/lib/ngenorca
+      - ./config:/etc/ngenorca:ro
+    environment:
+      - NGENORCA_GATEWAY__BIND=0.0.0.0
+      - NGENORCA_GATEWAY__PORT=18789
+      # Auth mode (None for local, TrustedProxy behind nginx+Authelia):
+      # - NGENORCA_GATEWAY__AUTH_MODE=TrustedProxy
+      #
+      # LLM Provider (set your API key here or in .env):
+      # - NGENORCA_AGENT__MODEL=anthropic/claude-sonnet-4-20250514
+      # - NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY=${ANTHROPIC_API_KEY}
+      # - NGENORCA_AGENT__PROVIDERS__OPENAI__API_KEY=${OPENAI_API_KEY}
+      #
+      # Channels (set tokens here or in .env):
+      # - NGENORCA_CHANNELS__TELEGRAM__ENABLED=true
+      # - NGENORCA_CHANNELS__TELEGRAM__BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # - NGENORCA_CHANNELS__DISCORD__ENABLED=true
+      # - NGENORCA_CHANNELS__DISCORD__BOT_TOKEN=${DISCORD_BOT_TOKEN}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Channel Adapters (optional, split mode) ──────────────────
+  #
+  # Uncomment these to run channel adapters as separate containers
+  # for crash isolation. They communicate with core via the event bus.
+  #
+  # telegram:
+  #   image: ngenorca/adapter-telegram:latest
+  #   container_name: ngenorca-telegram
+  #   restart: unless-stopped
+  #   depends_on:
+  #     core:
+  #       condition: service_healthy
+  #   environment:
+  #     - NGENORCA_CORE_URL=ws://core:18789
+  #     - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+  #
+  # discord:
+  #   image: ngenorca/adapter-discord:latest
+  #   container_name: ngenorca-discord
+  #   restart: unless-stopped
+  #   depends_on:
+  #     core:
+  #       condition: service_healthy
+  #   environment:
+  #     - NGENORCA_CORE_URL=ws://core:18789
+  #     - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+
+volumes:
+  ngenorca-data:
+    driver: local

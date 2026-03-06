@@ -1,0 +1,23 @@
+[package]
+name = "ngenorca-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NgenOrca CLI — gateway, onboard, status, identity, and memory commands"
+
+[[bin]]
+name = "ngenorca"
+path = "src/main.rs"
+
+[dependencies]
+ngenorca-core = { workspace = true }
+ngenorca-config = { workspace = true }
+ngenorca-gateway = { workspace = true }
+ngenorca-identity = { workspace = true }
+ngenorca-sandbox = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

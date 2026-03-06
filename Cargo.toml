@@ -1,0 +1,91 @@
+[workspace]
+members = [
+    "crates/ngenorca-core",
+    "crates/ngenorca-bus",
+    "crates/ngenorca-config",
+    "crates/ngenorca-identity",
+    "crates/ngenorca-memory",
+    "crates/ngenorca-plugin-sdk",
+    "crates/ngenorca-sandbox",
+    "crates/ngenorca-gateway",
+    "crates/ngenorca-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["NgenOrca Contributors"]
+repository = "https://github.com/ngenorca/ngenorca"
+description = "Personal AI assistant — microkernel architecture, hardware-bound identity, three-tier memory"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging / tracing / observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.28"
+opentelemetry-otlp = "0.28"
+tracing-opentelemetry = "0.29"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
+
+# Crypto
+ring = "0.17"
+base64 = "0.22"
+
+# HTTP / WebSocket
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tokio-tungstenite = "0.26"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Config
+toml = "0.8"
+figment = { version = "0.10", features = ["toml", "json", "env"] }
+
+# UUID / IDs
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+ulid = { version = "1", features = ["serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Channel (mpsc)
+flume = "0.11"
+
+# Async
+async-trait = "0.1"
+
+# Internal crates
+ngenorca-core = { path = "crates/ngenorca-core" }
+ngenorca-bus = { path = "crates/ngenorca-bus" }
+ngenorca-config = { path = "crates/ngenorca-config" }
+ngenorca-identity = { path = "crates/ngenorca-identity" }
+ngenorca-memory = { path = "crates/ngenorca-memory" }
+ngenorca-plugin-sdk = { path = "crates/ngenorca-plugin-sdk" }
+ngenorca-sandbox = { path = "crates/ngenorca-sandbox" }
+ngenorca-gateway = { path = "crates/ngenorca-gateway" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"

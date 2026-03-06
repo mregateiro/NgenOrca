@@ -1,0 +1,1336 @@
+//! # NgenOrca Config
+//!
+//! Composable configuration system. Instead of one monolithic config file,
+//! NgenOrca merges config fragments from:
+//!
+//! 1. Built-in defaults
+//! 2. System config (`/etc/ngenorca/` or `%PROGRAMDATA%\ngenorca\`)
+//! 3. User config (`~/.ngenorca/config.toml`)
+//! 4. Plugin-specific configs (`~/.ngenorca/plugins/<name>/config.toml`)
+//! 5. Environment variables (`NGENORCA_*`)
+//! 6. CLI flags
+//!
+//! Later sources override earlier ones. Each plugin declares its own config
+//! schema, which is validated at load time.
+
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use tracing::info;
+
+/// Top-level NgenOrca configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NgenOrcaConfig {
+    /// Gateway settings.
+    #[serde(default)]
+    pub gateway: GatewayConfig,
+
+    /// Agent/model settings.
+    #[serde(default)]
+    pub agent: AgentConfig,
+
+    /// Channel adapter settings.
+    #[serde(default)]
+    pub channels: ChannelsConfig,
+
+    /// Identity settings.
+    #[serde(default)]
+    pub identity: IdentityConfig,
+
+    /// Memory settings.
+    #[serde(default)]
+    pub memory: MemoryConfig,
+
+    /// Sandbox settings.
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+
+    /// Observability settings.
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
+
+    /// Data directory path.
+    #[serde(default = "default_data_dir")]
+    pub data_dir: PathBuf,
+}
+
+// ─── Gateway ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    /// Address to bind the gateway to.
+    #[serde(default = "default_bind")]
+    pub bind: String,
+
+    /// Port for the gateway WebSocket + HTTP.
+    #[serde(default = "default_port")]
+    pub port: u16,
+
+    /// Authentication mode.
+    #[serde(default)]
+    pub auth_mode: AuthMode,
+
+    /// Trusted reverse-proxy header name for the authenticated user.
+    /// When behind a reverse proxy that does auth (e.g. Authelia + nginx),
+    /// this header carries the verified username.
+    #[serde(default = "default_proxy_user_header")]
+    pub proxy_user_header: String,
+
+    /// Trusted reverse-proxy header name for the user's email.
+    #[serde(default = "default_proxy_email_header")]
+    pub proxy_email_header: String,
+
+    /// Trusted reverse-proxy header name for the user's groups.
+    #[serde(default = "default_proxy_groups_header")]
+    pub proxy_groups_header: String,
+
+    /// Password for Password auth mode.
+    #[serde(default)]
+    pub auth_password: Option<String>,
+
+    /// Tokens for Token auth mode.
+    #[serde(default)]
+    pub auth_tokens: Vec<String>,
+
+    /// Path to TLS certificate (for Certificate or TLS modes).
+    #[serde(default)]
+    pub tls_cert: Option<PathBuf>,
+
+    /// Path to TLS private key.
+    #[serde(default)]
+    pub tls_key: Option<PathBuf>,
+
+    /// Path to CA certificate for mTLS client verification.
+    #[serde(default)]
+    pub tls_ca: Option<PathBuf>,
+}
+
+// ─── Agent / LLM Providers ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Default model to use (e.g., "anthropic/claude-sonnet-4", "ollama/llama3.1").
+    #[serde(default = "default_model")]
+    pub model: String,
+
+    /// Default thinking level.
+    #[serde(default)]
+    pub thinking_level: ngenorca_core::session::ThinkingLevel,
+
+    /// Workspace root for agent files.
+    #[serde(default = "default_workspace")]
+    pub workspace: PathBuf,
+
+    /// LLM provider configurations.
+    #[serde(default)]
+    pub providers: ProvidersConfig,
+
+    /// Routing strategy for multi-agent orchestration.
+    #[serde(default)]
+    pub routing: RoutingStrategy,
+
+    /// Lightweight classifier model for intent detection.
+    /// Used before the main LLM when routing = Hybrid.
+    #[serde(default)]
+    pub classifier: Option<ClassifierConfig>,
+
+    /// Quality gate configuration.
+    #[serde(default)]
+    pub quality_gate: QualityGateConfig,
+
+    /// Sub-agents available for task delegation.
+    #[serde(default)]
+    pub sub_agents: Vec<SubAgentConfig>,
+}
+
+/// Configuration for all LLM providers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProvidersConfig {
+    /// Anthropic (Claude) provider.
+    #[serde(default)]
+    pub anthropic: Option<AnthropicProviderConfig>,
+
+    /// OpenAI (GPT) provider.
+    #[serde(default)]
+    pub openai: Option<OpenAIProviderConfig>,
+
+    /// Ollama (local models) provider.
+    #[serde(default)]
+    pub ollama: Option<OllamaProviderConfig>,
+
+    /// Azure OpenAI provider.
+    #[serde(default)]
+    pub azure: Option<AzureProviderConfig>,
+
+    /// Google Gemini provider.
+    #[serde(default)]
+    pub google: Option<GoogleProviderConfig>,
+
+    /// OpenRouter (multi-provider) provider.
+    #[serde(default)]
+    pub openrouter: Option<OpenRouterProviderConfig>,
+
+    /// Custom / self-hosted OpenAI-compatible provider.
+    #[serde(default)]
+    pub custom: Option<CustomProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicProviderConfig {
+    /// Anthropic API key (prefer env var NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY).
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Base URL (default: https://api.anthropic.com).
+    #[serde(default = "default_anthropic_url")]
+    pub base_url: String,
+
+    /// Maximum tokens to generate.
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+
+    /// Sampling temperature (0.0 - 1.0).
+    #[serde(default)]
+    pub temperature: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIProviderConfig {
+    /// OpenAI API key (prefer env var).
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Base URL (default: https://api.openai.com/v1).
+    #[serde(default = "default_openai_url")]
+    pub base_url: String,
+
+    /// Organization ID (optional).
+    #[serde(default)]
+    pub organization: Option<String>,
+
+    /// Maximum tokens to generate.
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+
+    /// Sampling temperature.
+    #[serde(default)]
+    pub temperature: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaProviderConfig {
+    /// Ollama API URL (default: http://127.0.0.1:11434).
+    #[serde(default = "default_ollama_url")]
+    pub base_url: String,
+
+    /// How long to keep model in VRAM after last request.
+    #[serde(default)]
+    pub keep_alive: Option<String>,
+
+    /// Context window size (affects VRAM usage).
+    #[serde(default)]
+    pub num_ctx: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AzureProviderConfig {
+    /// Azure API key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Azure OpenAI endpoint (e.g., https://your-resource.openai.azure.com).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+
+    /// Azure API version.
+    #[serde(default = "default_azure_api_version")]
+    pub api_version: String,
+
+    /// Deployment name in Azure portal.
+    #[serde(default)]
+    pub deployment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleProviderConfig {
+    /// Google AI API key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Base URL (default: https://generativelanguage.googleapis.com/v1beta).
+    #[serde(default = "default_google_url")]
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenRouterProviderConfig {
+    /// OpenRouter API key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Base URL (default: https://openrouter.ai/api/v1).
+    #[serde(default = "default_openrouter_url")]
+    pub base_url: String,
+
+    /// Site name shown in OpenRouter dashboard.
+    #[serde(default)]
+    pub site_name: Option<String>,
+
+    /// Fallback models for auto-failover.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomProviderConfig {
+    /// Base URL for any OpenAI-compatible API (vLLM, LM Studio, LocalAI, etc.).
+    pub base_url: String,
+
+    /// API key (some servers require a dummy key).
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Model name the server expects.
+    #[serde(default)]
+    pub model_name: Option<String>,
+}
+
+// ─── Multi-Agent Orchestration ───────────────────────────────────
+
+/// Routing strategy for the agent orchestrator.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoutingStrategy {
+    /// No sub-agents — all requests go to the primary model.
+    #[default]
+    Single,
+    /// The orchestrator LLM decides which sub-agent to use.
+    LlmRouted,
+    /// Static rules based on intent → sub-agent mapping.
+    RuleBased,
+    /// Try local SLM first; escalate to cloud LLM if quality is insufficient.
+    LocalFirst,
+    /// Minimise cost: always use the cheapest model that can handle the task.
+    CostOptimized,
+    /// Hybrid: regex rules → SLM classifier → LLM (cascading, recommended).
+    Hybrid,
+}
+
+/// Configuration for the lightweight intent classifier.
+/// A small/fast model used to classify tasks before routing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassifierConfig {
+    /// Model to use for classification (e.g., "ollama/qwen2.5:1.5b").
+    pub model: String,
+
+    /// Minimum confidence to trust the classifier (0.0–1.0).
+    /// Below this, falls back to LLM-based classification.
+    #[serde(default = "default_classifier_confidence")]
+    pub confidence_threshold: f64,
+
+    /// Maximum tokens for classification response.
+    #[serde(default = "default_classifier_max_tokens")]
+    pub max_tokens: usize,
+
+    /// Temperature for classifier (low = deterministic).
+    #[serde(default = "default_classifier_temperature")]
+    pub temperature: f64,
+}
+
+/// Configuration for the quality gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityGateConfig {
+    /// Enable quality gate evaluation of sub-agent responses.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Method: "heuristic", "slm", "llm", "auto".
+    /// - heuristic: length/format checks only (zero cost)
+    /// - slm: use classifier model to evaluate
+    /// - llm: use primary model to evaluate (expensive)
+    /// - auto: heuristic first, slm if uncertain
+    #[serde(default = "default_quality_method")]
+    pub method: String,
+
+    /// Minimum response length (characters) to accept.
+    #[serde(default = "default_min_response_length")]
+    pub min_response_length: usize,
+
+    /// Maximum retries before escalating.
+    #[serde(default = "default_max_escalations")]
+    pub max_escalations: u32,
+
+    /// Auto-accept responses from high-confidence learned routing rules.
+    #[serde(default = "default_true")]
+    pub auto_accept_learned: bool,
+}
+
+impl Default for QualityGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            method: default_quality_method(),
+            min_response_length: default_min_response_length(),
+            max_escalations: default_max_escalations(),
+            auto_accept_learned: true,
+        }
+    }
+}
+
+/// Configuration for a sub-agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentConfig {
+    /// Unique name for this sub-agent (e.g., "local-general", "coder").
+    pub name: String,
+
+    /// Model to use (e.g., "ollama/llama3.1:8b", "ollama/codellama:13b").
+    pub model: String,
+
+    /// Roles this sub-agent can fulfil.
+    #[serde(default)]
+    pub roles: Vec<String>,
+
+    /// Base system prompt (the orchestrator may augment it dynamically).
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+
+    /// Maximum tokens to generate.
+    #[serde(default = "default_sub_agent_max_tokens")]
+    pub max_tokens: usize,
+
+    /// Sampling temperature.
+    #[serde(default = "default_sub_agent_temperature")]
+    pub temperature: f64,
+
+    /// Maximum complexity this sub-agent should handle.
+    /// Tasks above this complexity will be routed elsewhere.
+    #[serde(default = "default_max_complexity")]
+    pub max_complexity: String,
+
+    /// Whether this model is local (affects cost/privacy routing decisions).
+    #[serde(default)]
+    pub is_local: bool,
+
+    /// Relative cost weight (1 = cheapest, 10 = most expensive).
+    /// Used by CostOptimized routing.
+    #[serde(default = "default_cost_weight")]
+    pub cost_weight: u32,
+
+    /// Priority (lower = preferred when multiple sub-agents match).
+    #[serde(default = "default_priority")]
+    pub priority: u32,
+}
+
+// ─── Channel Adapters ───────────────────────────────────────────
+
+/// Channel adapter configurations.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChannelsConfig {
+    /// Built-in WebChat (served by the gateway).
+    #[serde(default)]
+    pub webchat: Option<WebChatChannelConfig>,
+
+    /// Telegram Bot adapter.
+    #[serde(default)]
+    pub telegram: Option<TelegramChannelConfig>,
+
+    /// Discord Bot adapter.
+    #[serde(default)]
+    pub discord: Option<DiscordChannelConfig>,
+
+    /// WhatsApp Business Cloud API adapter.
+    #[serde(default)]
+    pub whatsapp: Option<WhatsAppChannelConfig>,
+
+    /// Slack Bot adapter.
+    #[serde(default)]
+    pub slack: Option<SlackChannelConfig>,
+
+    /// Signal adapter (via signal-cli).
+    #[serde(default)]
+    pub signal: Option<SignalChannelConfig>,
+
+    /// Matrix adapter.
+    #[serde(default)]
+    pub matrix: Option<MatrixChannelConfig>,
+
+    /// Microsoft Teams adapter.
+    #[serde(default)]
+    pub teams: Option<TeamsChannelConfig>,
+
+    /// Additional custom channels.
+    #[serde(default)]
+    pub custom: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebChatChannelConfig {
+    /// Enable WebChat (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// UI theme.
+    #[serde(default = "default_webchat_theme")]
+    pub theme: String,
+
+    /// Max upload size in MB.
+    #[serde(default = "default_upload_size")]
+    pub max_upload_size_mb: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramChannelConfig {
+    /// Enable Telegram adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Bot token from @BotFather.
+    #[serde(default)]
+    pub bot_token: Option<String>,
+
+    /// Use webhook mode (requires public URL). If false, uses long-polling.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+
+    /// Use long-polling instead of webhooks (recommended for homelab/VPN setups).
+    #[serde(default = "default_true")]
+    pub polling: bool,
+
+    /// Restrict to specific Telegram user IDs (empty = allow all).
+    #[serde(default)]
+    pub allowed_users: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordChannelConfig {
+    /// Enable Discord adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Discord bot token.
+    #[serde(default)]
+    pub bot_token: Option<String>,
+
+    /// Application ID.
+    #[serde(default)]
+    pub application_id: Option<String>,
+
+    /// Restrict to specific guild (server) IDs.
+    #[serde(default)]
+    pub guild_ids: Vec<String>,
+
+    /// Restrict to specific role names.
+    #[serde(default)]
+    pub allowed_roles: Vec<String>,
+
+    /// Text command prefix (e.g., "!").
+    #[serde(default)]
+    pub command_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhatsAppChannelConfig {
+    /// Enable WhatsApp adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Phone Number ID from Meta developer dashboard.
+    #[serde(default)]
+    pub phone_number_id: Option<String>,
+
+    /// Permanent access token.
+    #[serde(default)]
+    pub access_token: Option<String>,
+
+    /// Webhook verification token (you choose this).
+    #[serde(default)]
+    pub verify_token: Option<String>,
+
+    /// Webhook path the gateway listens on.
+    #[serde(default = "default_whatsapp_webhook_path")]
+    pub webhook_path: String,
+
+    /// App secret for webhook signature verification.
+    #[serde(default)]
+    pub app_secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlackChannelConfig {
+    /// Enable Slack adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Bot User OAuth Token.
+    #[serde(default)]
+    pub bot_token: Option<String>,
+
+    /// App-Level Token (for Socket Mode).
+    #[serde(default)]
+    pub app_token: Option<String>,
+
+    /// Signing secret for webhook verification.
+    #[serde(default)]
+    pub signing_secret: Option<String>,
+
+    /// Use Socket Mode (no public URL needed).
+    #[serde(default = "default_true")]
+    pub socket_mode: bool,
+
+    /// Restrict to specific channel IDs.
+    #[serde(default)]
+    pub channel_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalChannelConfig {
+    /// Enable Signal adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Signal phone number.
+    #[serde(default)]
+    pub phone_number: Option<String>,
+
+    /// Path to signal-cli binary.
+    #[serde(default)]
+    pub signal_cli_path: Option<PathBuf>,
+
+    /// signal-cli data path.
+    #[serde(default)]
+    pub data_path: Option<PathBuf>,
+
+    /// Signal-cli mode (daemon or dbus).
+    #[serde(default = "default_signal_mode")]
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatrixChannelConfig {
+    /// Enable Matrix adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Matrix homeserver URL.
+    #[serde(default)]
+    pub homeserver: Option<String>,
+
+    /// Bot user ID (e.g., @ngenorca:matrix.org).
+    #[serde(default)]
+    pub user_id: Option<String>,
+
+    /// Access token.
+    #[serde(default)]
+    pub access_token: Option<String>,
+
+    /// Device ID.
+    #[serde(default)]
+    pub device_id: Option<String>,
+
+    /// Auto-join rooms when invited.
+    #[serde(default)]
+    pub auto_join: bool,
+
+    /// Enable end-to-end encryption.
+    #[serde(default)]
+    pub encrypted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamsChannelConfig {
+    /// Enable Microsoft Teams adapter.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Bot Framework App ID.
+    #[serde(default)]
+    pub app_id: Option<String>,
+
+    /// Bot Framework App Password.
+    #[serde(default)]
+    pub app_password: Option<String>,
+
+    /// Azure AD Tenant ID ("common" for multi-tenant).
+    #[serde(default = "default_teams_tenant")]
+    pub tenant_id: String,
+
+    /// Webhook URL for incoming messages.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+}
+
+// ─── Identity ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityConfig {
+    /// Whether to require hardware attestation for owner identity.
+    #[serde(default = "default_true")]
+    pub require_hardware_attestation: bool,
+
+    /// Whether to enable behavioral biometrics (voice print, typing cadence).
+    #[serde(default)]
+    pub biometrics_enabled: bool,
+
+    /// Auto-lock after N minutes of inactivity (0 = disabled).
+    #[serde(default = "default_auto_lock_minutes")]
+    pub auto_lock_minutes: u32,
+}
+
+// ─── Memory ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    /// Enable three-tier memory system.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Max episodic memory entries before pruning.
+    #[serde(default = "default_episodic_max")]
+    pub episodic_max_entries: usize,
+
+    /// Consolidation interval (seconds).
+    #[serde(default = "default_consolidation_interval")]
+    pub consolidation_interval_secs: u64,
+
+    /// Max semantic memory tokens to inject per prompt.
+    #[serde(default = "default_semantic_budget")]
+    pub semantic_token_budget: usize,
+}
+
+// ─── Sandbox ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Sandbox backend (auto-detected if not set).
+    #[serde(default)]
+    pub backend: SandboxBackend,
+
+    /// Whether tool execution is sandboxed by default.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum SandboxBackend {
+    /// Auto-detect based on environment.
+    #[default]
+    Auto,
+    /// Windows Job Objects + Restricted Tokens.
+    WindowsJob,
+    /// Linux seccomp + landlock + namespaces.
+    LinuxSeccomp,
+    /// macOS App Sandbox.
+    MacOsSandbox,
+    /// Container-level (defer to Docker/Podman).
+    Container,
+    /// Disabled (not recommended).
+    None,
+}
+
+// ─── Auth Modes ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum AuthMode {
+    /// No authentication (loopback only or trusted proxy).
+    #[default]
+    None,
+    /// Shared password.
+    Password,
+    /// Token-based.
+    Token,
+    /// mTLS client certificates.
+    Certificate,
+    /// Trusted reverse proxy (Authelia, Authentik, etc.).
+    /// The proxy handles authentication; NgenOrca reads the verified
+    /// user from the `proxy_user_header` header.
+    TrustedProxy,
+}
+
+// ─── Observability ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    /// Enable OpenTelemetry export.
+    #[serde(default)]
+    pub otlp_enabled: bool,
+
+    /// OTLP endpoint (e.g., "http://localhost:4317").
+    #[serde(default = "default_otlp_endpoint")]
+    pub otlp_endpoint: String,
+
+    /// Log level filter.
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+
+    /// Enable JSON structured logging.
+    #[serde(default)]
+    pub json_logs: bool,
+}
+
+// ─── Default value functions ────────────────────────────────────
+
+fn default_bind() -> String { "127.0.0.1".into() }
+fn default_port() -> u16 { 18789 }
+fn default_model() -> String { "anthropic/claude-sonnet-4-20250514".into() }
+fn default_data_dir() -> PathBuf { dirs_default().join("data") }
+fn default_workspace() -> PathBuf { dirs_default().join("workspace") }
+fn default_true() -> bool { true }
+fn default_auto_lock_minutes() -> u32 { 30 }
+fn default_episodic_max() -> usize { 100_000 }
+fn default_consolidation_interval() -> u64 { 3600 }
+fn default_semantic_budget() -> usize { 4096 }
+fn default_otlp_endpoint() -> String { "http://localhost:4317".into() }
+fn default_log_level() -> String { "info".into() }
+fn default_proxy_user_header() -> String { "Remote-User".into() }
+fn default_proxy_email_header() -> String { "Remote-Email".into() }
+fn default_proxy_groups_header() -> String { "Remote-Groups".into() }
+fn default_anthropic_url() -> String { "https://api.anthropic.com".into() }
+fn default_openai_url() -> String { "https://api.openai.com/v1".into() }
+fn default_ollama_url() -> String { "http://127.0.0.1:11434".into() }
+fn default_azure_api_version() -> String { "2024-10-21".into() }
+fn default_google_url() -> String { "https://generativelanguage.googleapis.com/v1beta".into() }
+fn default_openrouter_url() -> String { "https://openrouter.ai/api/v1".into() }
+fn default_classifier_confidence() -> f64 { 0.8 }
+fn default_classifier_max_tokens() -> usize { 64 }
+fn default_classifier_temperature() -> f64 { 0.1 }
+fn default_quality_method() -> String { "auto".into() }
+fn default_min_response_length() -> usize { 10 }
+fn default_max_escalations() -> u32 { 2 }
+fn default_sub_agent_max_tokens() -> usize { 2048 }
+fn default_sub_agent_temperature() -> f64 { 0.3 }
+fn default_max_complexity() -> String { "Moderate".into() }
+fn default_cost_weight() -> u32 { 1 }
+fn default_priority() -> u32 { 10 }
+fn default_webchat_theme() -> String { "dark".into() }
+fn default_upload_size() -> usize { 10 }
+fn default_whatsapp_webhook_path() -> String { "/webhooks/whatsapp".into() }
+fn default_signal_mode() -> String { "daemon".into() }
+fn default_teams_tenant() -> String { "common".into() }
+
+fn dirs_default() -> PathBuf {
+    dirs_home().join(".ngenorca")
+}
+
+fn dirs_home() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("C:\\Users\\default"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    }
+}
+
+// ─── Default impls ──────────────────────────────────────────────
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            bind: default_bind(),
+            port: default_port(),
+            auth_mode: AuthMode::default(),
+            proxy_user_header: default_proxy_user_header(),
+            proxy_email_header: default_proxy_email_header(),
+            proxy_groups_header: default_proxy_groups_header(),
+            auth_password: None,
+            auth_tokens: vec![],
+            tls_cert: None,
+            tls_key: None,
+            tls_ca: None,
+        }
+    }
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            model: default_model(),
+            thinking_level: ngenorca_core::session::ThinkingLevel::default(),
+            workspace: default_workspace(),
+            providers: ProvidersConfig::default(),
+            routing: RoutingStrategy::default(),
+            classifier: None,
+            quality_gate: QualityGateConfig::default(),
+            sub_agents: vec![],
+        }
+    }
+}
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            require_hardware_attestation: true,
+            biometrics_enabled: false,
+            auto_lock_minutes: default_auto_lock_minutes(),
+        }
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            episodic_max_entries: default_episodic_max(),
+            consolidation_interval_secs: default_consolidation_interval(),
+            semantic_token_budget: default_semantic_budget(),
+        }
+    }
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            backend: SandboxBackend::Auto,
+            enabled: true,
+        }
+    }
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            otlp_enabled: false,
+            otlp_endpoint: default_otlp_endpoint(),
+            log_level: default_log_level(),
+            json_logs: false,
+        }
+    }
+}
+
+impl Default for NgenOrcaConfig {
+    fn default() -> Self {
+        Self {
+            gateway: GatewayConfig::default(),
+            agent: AgentConfig::default(),
+            channels: ChannelsConfig::default(),
+            identity: IdentityConfig::default(),
+            memory: MemoryConfig::default(),
+            sandbox: SandboxConfig::default(),
+            observability: ObservabilityConfig::default(),
+            data_dir: default_data_dir(),
+        }
+    }
+}
+
+// ─── Helper methods ─────────────────────────────────────────────
+
+impl NgenOrcaConfig {
+    /// Parse the model string to extract (provider, model_name).
+    /// e.g., "anthropic/claude-sonnet-4" → ("anthropic", "claude-sonnet-4")
+    pub fn parse_model(&self) -> (&str, &str) {
+        self.agent
+            .model
+            .split_once('/')
+            .unwrap_or(("custom", &self.agent.model))
+    }
+
+    /// Check if using a trusted reverse proxy for authentication.
+    pub fn is_trusted_proxy(&self) -> bool {
+        matches!(self.gateway.auth_mode, AuthMode::TrustedProxy)
+    }
+
+    /// Get the list of enabled channels.
+    pub fn enabled_channels(&self) -> Vec<&str> {
+        let mut channels = Vec::new();
+        if self.channels.webchat.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("webchat");
+        }
+        if self.channels.telegram.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("telegram");
+        }
+        if self.channels.discord.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("discord");
+        }
+        if self.channels.whatsapp.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("whatsapp");
+        }
+        if self.channels.slack.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("slack");
+        }
+        if self.channels.signal.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("signal");
+        }
+        if self.channels.matrix.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("matrix");
+        }
+        if self.channels.teams.as_ref().is_some_and(|c| c.enabled) {
+            channels.push("teams");
+        }
+        channels
+    }
+
+    /// Check if multi-agent orchestration is enabled.
+    pub fn is_orchestrated(&self) -> bool {
+        !matches!(self.agent.routing, RoutingStrategy::Single)
+            && !self.agent.sub_agents.is_empty()
+    }
+
+    /// Get the list of configured sub-agent names.
+    pub fn sub_agent_names(&self) -> Vec<&str> {
+        self.agent.sub_agents.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    /// Find a sub-agent config by name.
+    pub fn sub_agent(&self, name: &str) -> Option<&SubAgentConfig> {
+        self.agent.sub_agents.iter().find(|s| s.name == name)
+    }
+
+    /// Get sub-agents that can handle a given role.
+    pub fn sub_agents_for_role(&self, role: &str) -> Vec<&SubAgentConfig> {
+        self.agent.sub_agents
+            .iter()
+            .filter(|s| s.roles.iter().any(|r| r.eq_ignore_ascii_case(role)))
+            .collect()
+    }
+
+    /// Get the cheapest sub-agent (lowest cost_weight) that matches a role.
+    pub fn cheapest_agent_for_role(&self, role: &str) -> Option<&SubAgentConfig> {
+        self.sub_agents_for_role(role)
+            .into_iter()
+            .min_by_key(|s| s.cost_weight)
+    }
+}
+
+/// Load configuration by merging all sources in priority order.
+pub fn load_config(config_path: Option<&str>) -> ngenorca_core::Result<NgenOrcaConfig> {
+    let mut figment = Figment::from(Serialized::defaults(NgenOrcaConfig::default()));
+
+    // User config file.
+    let user_config = config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs_default().join("config.toml"));
+
+    if user_config.exists() {
+        info!(?user_config, "Loading config file");
+        figment = figment.merge(Toml::file(&user_config));
+    }
+
+    // Environment variables (NGENORCA_GATEWAY__PORT=9999 etc.).
+    figment = figment.merge(Env::prefixed("NGENORCA_").split("__"));
+
+    let config: NgenOrcaConfig = figment
+        .extract()
+        .map_err(|e| ngenorca_core::Error::Config(e.to_string()))?;
+
+    let (provider, model) = config.parse_model();
+    let channels = config.enabled_channels();
+    let sub_agents = config.sub_agent_names();
+    info!(
+        bind = %config.gateway.bind,
+        port = %config.gateway.port,
+        provider,
+        model,
+        auth = ?config.gateway.auth_mode,
+        routing = ?config.agent.routing,
+        ?channels,
+        ?sub_agents,
+        orchestrated = config.is_orchestrated(),
+        "Configuration loaded"
+    );
+
+    Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_has_expected_bind_and_port() {
+        let cfg = NgenOrcaConfig::default();
+        assert_eq!(cfg.gateway.bind, "127.0.0.1");
+        assert_eq!(cfg.gateway.port, 18789);
+    }
+
+    #[test]
+    fn default_auth_mode_is_none() {
+        let cfg = NgenOrcaConfig::default();
+        assert!(matches!(cfg.gateway.auth_mode, AuthMode::None));
+    }
+
+    #[test]
+    fn default_routing_is_single() {
+        let cfg = NgenOrcaConfig::default();
+        assert!(matches!(cfg.agent.routing, RoutingStrategy::Single));
+    }
+
+    #[test]
+    fn parse_model_splits_provider_and_name() {
+        let cfg = NgenOrcaConfig {
+            agent: AgentConfig {
+                model: "anthropic/claude-sonnet-4".into(),
+                ..AgentConfig::default()
+            },
+            ..NgenOrcaConfig::default()
+        };
+        let (provider, model) = cfg.parse_model();
+        assert_eq!(provider, "anthropic");
+        assert_eq!(model, "claude-sonnet-4");
+    }
+
+    #[test]
+    fn parse_model_without_slash_returns_custom() {
+        let cfg = NgenOrcaConfig {
+            agent: AgentConfig {
+                model: "gpt-4o".into(),
+                ..AgentConfig::default()
+            },
+            ..NgenOrcaConfig::default()
+        };
+        let (provider, model) = cfg.parse_model();
+        assert_eq!(provider, "custom");
+        assert_eq!(model, "gpt-4o");
+    }
+
+    #[test]
+    fn is_trusted_proxy_true_when_set() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.gateway.auth_mode = AuthMode::TrustedProxy;
+        assert!(cfg.is_trusted_proxy());
+    }
+
+    #[test]
+    fn is_trusted_proxy_false_when_none() {
+        let cfg = NgenOrcaConfig::default();
+        assert!(!cfg.is_trusted_proxy());
+    }
+
+    #[test]
+    fn enabled_channels_empty_by_default() {
+        let cfg = NgenOrcaConfig::default();
+        assert!(cfg.enabled_channels().is_empty());
+    }
+
+    #[test]
+    fn enabled_channels_detects_webchat() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.webchat = Some(WebChatChannelConfig {
+            enabled: true,
+            theme: "dark".into(),
+            max_upload_size_mb: 10,
+        });
+        let channels = cfg.enabled_channels();
+        assert_eq!(channels, vec!["webchat"]);
+    }
+
+    #[test]
+    fn is_orchestrated_when_routing_and_agents() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.routing = RoutingStrategy::Hybrid;
+        cfg.agent.sub_agents = vec![SubAgentConfig {
+            name: "local".into(),
+            model: "ollama/llama3".into(),
+            roles: vec!["general".into()],
+            system_prompt: None,
+            max_tokens: 2048,
+            temperature: 0.3,
+            max_complexity: "Moderate".into(),
+            is_local: true,
+            cost_weight: 1,
+            priority: 10,
+        }];
+        assert!(cfg.is_orchestrated());
+    }
+
+    #[test]
+    fn is_not_orchestrated_with_single_routing() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.routing = RoutingStrategy::Single;
+        cfg.agent.sub_agents = vec![SubAgentConfig {
+            name: "local".into(),
+            model: "ollama/llama3".into(),
+            roles: vec!["general".into()],
+            system_prompt: None,
+            max_tokens: 2048,
+            temperature: 0.3,
+            max_complexity: "Moderate".into(),
+            is_local: true,
+            cost_weight: 1,
+            priority: 10,
+        }];
+        assert!(!cfg.is_orchestrated());
+    }
+
+    #[test]
+    fn is_not_orchestrated_with_no_agents() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.routing = RoutingStrategy::Hybrid;
+        cfg.agent.sub_agents = vec![];
+        assert!(!cfg.is_orchestrated());
+    }
+
+    fn sample_sub_agents() -> Vec<SubAgentConfig> {
+        vec![
+            SubAgentConfig {
+                name: "local-general".into(),
+                model: "ollama/llama3:8b".into(),
+                roles: vec!["general".into(), "summarization".into()],
+                system_prompt: None,
+                max_tokens: 2048,
+                temperature: 0.3,
+                max_complexity: "Moderate".into(),
+                is_local: true,
+                cost_weight: 1,
+                priority: 10,
+            },
+            SubAgentConfig {
+                name: "coder".into(),
+                model: "ollama/codellama:13b".into(),
+                roles: vec!["coding".into()],
+                system_prompt: Some("You are a coding expert.".into()),
+                max_tokens: 4096,
+                temperature: 0.2,
+                max_complexity: "Complex".into(),
+                is_local: true,
+                cost_weight: 2,
+                priority: 5,
+            },
+            SubAgentConfig {
+                name: "cloud".into(),
+                model: "anthropic/claude-sonnet-4".into(),
+                roles: vec!["general".into(), "coding".into()],
+                system_prompt: None,
+                max_tokens: 8192,
+                temperature: 0.7,
+                max_complexity: "Expert".into(),
+                is_local: false,
+                cost_weight: 10,
+                priority: 100,
+            },
+        ]
+    }
+
+    #[test]
+    fn sub_agent_finds_by_name() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.sub_agents = sample_sub_agents();
+        assert!(cfg.sub_agent("coder").is_some());
+        assert_eq!(cfg.sub_agent("coder").unwrap().model, "ollama/codellama:13b");
+        assert!(cfg.sub_agent("nonexistent").is_none());
+    }
+
+    #[test]
+    fn sub_agents_for_role_filters_correctly() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.sub_agents = sample_sub_agents();
+        let general = cfg.sub_agents_for_role("general");
+        assert_eq!(general.len(), 2); // local-general + cloud
+        let coding = cfg.sub_agents_for_role("coding");
+        assert_eq!(coding.len(), 2); // coder + cloud
+        let empty = cfg.sub_agents_for_role("vision");
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn cheapest_agent_for_role_returns_min_cost() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.sub_agents = sample_sub_agents();
+        let cheapest = cfg.cheapest_agent_for_role("general").unwrap();
+        assert_eq!(cheapest.name, "local-general");
+        assert_eq!(cheapest.cost_weight, 1);
+    }
+
+    #[test]
+    fn cheapest_agent_for_role_returns_none_when_empty() {
+        let cfg = NgenOrcaConfig::default();
+        assert!(cfg.cheapest_agent_for_role("anything").is_none());
+    }
+
+    #[test]
+    fn sub_agent_names_returns_all() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.sub_agents = sample_sub_agents();
+        let names = cfg.sub_agent_names();
+        assert_eq!(names, vec!["local-general", "coder", "cloud"]);
+    }
+
+    #[test]
+    fn default_proxy_headers() {
+        let cfg = NgenOrcaConfig::default();
+        assert_eq!(cfg.gateway.proxy_user_header, "Remote-User");
+        assert_eq!(cfg.gateway.proxy_email_header, "Remote-Email");
+        assert_eq!(cfg.gateway.proxy_groups_header, "Remote-Groups");
+    }
+
+    #[test]
+    fn quality_gate_defaults() {
+        let qg = QualityGateConfig::default();
+        assert!(qg.enabled);
+        assert_eq!(qg.method, "auto");
+        assert_eq!(qg.min_response_length, 10);
+        assert_eq!(qg.max_escalations, 2);
+        assert!(qg.auto_accept_learned);
+    }
+
+    #[test]
+    fn auth_mode_serde_roundtrip() {
+        let modes = vec![
+            AuthMode::None,
+            AuthMode::TrustedProxy,
+            AuthMode::Token,
+            AuthMode::Password,
+            AuthMode::Certificate,
+        ];
+        for mode in &modes {
+            let json = serde_json::to_string(mode).unwrap();
+            let back: AuthMode = serde_json::from_str(&json).unwrap();
+            // AuthMode doesn't derive PartialEq, so compare debug strings
+            assert_eq!(format!("{:?}", mode), format!("{:?}", back));
+        }
+    }
+
+    #[test]
+    fn routing_strategy_serde_roundtrip() {
+        let strategies = vec![
+            RoutingStrategy::Single,
+            RoutingStrategy::LlmRouted,
+            RoutingStrategy::RuleBased,
+            RoutingStrategy::LocalFirst,
+            RoutingStrategy::CostOptimized,
+            RoutingStrategy::Hybrid,
+        ];
+        for s in &strategies {
+            let json = serde_json::to_string(s).unwrap();
+            let back: RoutingStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(*s, back);
+        }
+    }
+
+    #[test]
+    fn config_serde_roundtrip() {
+        let cfg = NgenOrcaConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: NgenOrcaConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg.gateway.port, back.gateway.port);
+        assert_eq!(cfg.gateway.bind, back.gateway.bind);
+        assert_eq!(cfg.agent.model, back.agent.model);
+    }
+
+    #[test]
+    fn identity_config_defaults() {
+        let cfg = IdentityConfig::default();
+        assert!(cfg.require_hardware_attestation);
+        assert!(!cfg.biometrics_enabled);
+    }
+
+    #[test]
+    fn memory_config_defaults() {
+        let cfg = MemoryConfig::default();
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn sandbox_config_defaults() {
+        let cfg = SandboxConfig::default();
+        assert!(cfg.enabled);
+        assert!(matches!(cfg.backend, SandboxBackend::Auto));
+    }
+}

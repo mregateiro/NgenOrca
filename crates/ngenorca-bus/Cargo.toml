@@ -1,0 +1,19 @@
+[package]
+name = "ngenorca-bus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Durable event bus with SQLite-backed event log and in-memory pub/sub"
+
+[dependencies]
+ngenorca-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+flume = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+ulid = { workspace = true }
