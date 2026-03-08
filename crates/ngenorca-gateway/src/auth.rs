@@ -61,6 +61,17 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Exempt health/metrics/root endpoints from authentication so that
+    // Docker healthchecks, Prometheus scrapers, and load-balancer probes
+    // work without credentials.
+    let path = request.uri().path();
+    if path == "/health" || path == "/metrics" || path == "/" {
+        request
+            .extensions_mut()
+            .insert(CallerIdentity::default());
+        return Ok(next.run(request).await);
+    }
+
     let config = state.config();
     let auth_mode = &config.gateway.auth_mode;
 
@@ -299,5 +310,25 @@ mod tests {
         assert_eq!(cloned.username, id.username);
         assert_eq!(cloned.email, id.email);
         assert_eq!(cloned.groups, id.groups);
+    }
+
+    #[test]
+    fn exempt_paths_are_recognized() {
+        // The paths /health, /metrics, and / must bypass auth.
+        let exempt = ["/health", "/metrics", "/"];
+        for p in &exempt {
+            assert!(
+                *p == "/health" || *p == "/metrics" || *p == "/",
+                "path {p} should be exempt"
+            );
+        }
+        // Non-exempt paths
+        let non_exempt = ["/api/v1/chat", "/ws", "/api/v1/status"];
+        for p in &non_exempt {
+            assert!(
+                *p != "/health" && *p != "/metrics" && *p != "/",
+                "path {p} should NOT be exempt"
+            );
+        }
     }
 }

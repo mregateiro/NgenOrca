@@ -7,7 +7,7 @@ use crate::state::AppState;
 use axum::middleware;
 use ngenorca_core::{Error, Result};
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -35,6 +35,23 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
         "disabled".into()
     };
 
+    let cors_origins = &state.config().gateway.cors_allowed_origins;
+    let cors_info: String;
+    let cors_layer = if cors_origins.is_empty() {
+        cors_info = "permissive (allow all)".into();
+        CorsLayer::permissive()
+    } else {
+        cors_info = format!("{:?}", cors_origins);
+        let origins: Vec<axum::http::HeaderValue> = cors_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any)
+    };
+
     let state_for_middleware = state.clone();
     let app = routes::router(state)
         .layer(middleware::from_fn_with_state(
@@ -45,8 +62,11 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
             state_for_middleware,
             auth::auth_middleware,
         ))
+        .layer(middleware::from_fn(
+            crate::request_id::request_id_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+        .layer(cors_layer);
 
     // NOTE: The gateway binds plain TCP. TLS termination is delegated to a
     // reverse proxy (nginx, Caddy, Traefik, etc.). The tls_cert/tls_key fields
@@ -60,9 +80,11 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
     info!("NgenOrca gateway listening on {}", addr);
     info!("  Auth:      {}", auth_mode);
     info!("  RateLimit: {}", rate_limit_info);
+    info!("  CORS:      {}", cors_info);
     info!("  Provider:  {}/{}", provider, model);
     info!("  Channels:  {:?}", channels);
     info!("  Health:    http://{}/health", addr);
+    info!("  Version:   http://{}/api/v1/version", addr);
     info!("  Status:    http://{}/api/v1/status", addr);
     info!("  Chat:      POST http://{}/api/v1/chat", addr);
     info!("  WebSocket: ws://{}/ws", addr);

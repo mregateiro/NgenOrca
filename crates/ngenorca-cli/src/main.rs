@@ -83,18 +83,46 @@ enum IdentityAction {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging.
-    let log_level = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
-        )
-        .with_target(false)
-        .init();
+    // For non-gateway commands, initialize simple logging immediately.
+    // For gateway, we defer to use config-aware logging.
+    let is_gateway = matches!(cli.command, Commands::Gateway { .. });
+    if !is_gateway {
+        let log_level = if cli.verbose { "debug" } else { "info" };
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
+            )
+            .with_target(false)
+            .init();
+    }
 
     match cli.command {
         Commands::Gateway { port, bind } => {
             let mut config = ngenorca_config::load_config(cli.config.as_deref())?;
+
+            // Initialize logging with config settings (overrideable by --verbose).
+            let log_level = if cli.verbose {
+                "debug"
+            } else {
+                &config.observability.log_level
+            };
+            if config.observability.json_logs {
+                tracing_subscriber::fmt()
+                    .json()
+                    .with_env_filter(
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new(log_level)),
+                    )
+                    .init();
+            } else {
+                tracing_subscriber::fmt()
+                    .with_env_filter(
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new(log_level)),
+                    )
+                    .with_target(false)
+                    .init();
+            }
 
             if let Some(p) = port {
                 config.gateway.port = p;
@@ -169,17 +197,87 @@ async fn main() -> anyhow::Result<()> {
             }
             IdentityAction::Pair => {
                 println!("Starting device pairing...");
+
+                let config = ngenorca_config::load_config(cli.config.as_deref())?;
+                let identity_db = config.data_dir.join("identity.db");
+                let manager = ngenorca_identity::IdentityManager::new(
+                    identity_db.to_str().unwrap_or("identity.db"),
+                )?;
+
                 let caps = ngenorca_identity::fingerprint::detect_capabilities();
                 println!("Hardware capabilities:");
                 println!("  TPM:            {}", if caps.tpm_available { "✓" } else { "✗" });
                 println!("  Secure Enclave: {}", if caps.secure_enclave_available { "✓" } else { "✗" });
                 println!("  StrongBox:      {}", if caps.strongbox_available { "✓" } else { "✗" });
                 println!();
-                println!("(Full pairing flow coming soon)");
+
+                // Generate device fingerprint.
+                let (device_id, attestation, public_key) =
+                    ngenorca_identity::fingerprint::generate_device_fingerprint()?;
+                println!("Device ID:    {}", device_id.0);
+                println!("Attestation:  {:?}", attestation);
+
+                // Determine user — use first registered user, or prompt.
+                let users = manager.list_users()?;
+                let user_id = if users.is_empty() {
+                    println!();
+                    println!("No users found. Register one first with `ngenorca onboard`.");
+                    return Ok(());
+                } else {
+                    users[0].user_id.clone()
+                };
+
+                let public_key_hash = {
+                    use std::fmt::Write;
+                    let mut hash = String::new();
+                    for byte in &public_key[..std::cmp::min(16, public_key.len())] {
+                        let _ = write!(hash, "{byte:02x}");
+                    }
+                    hash
+                };
+
+                let device_name = std::env::var("COMPUTERNAME")
+                    .or_else(|_| std::env::var("HOSTNAME"))
+                    .unwrap_or_else(|_| "unknown-device".into());
+
+                let device = ngenorca_core::identity::DeviceBinding {
+                    device_id: device_id.clone(),
+                    device_name: device_name.clone(),
+                    attestation,
+                    public_key_hash,
+                    trust: ngenorca_core::TrustLevel::Hardware,
+                    paired_at: chrono::Utc::now(),
+                    last_used: chrono::Utc::now(),
+                };
+
+                manager.pair_device(&user_id, device)?;
+                println!();
+                println!("✓ Device '{}' ({}) paired to user '{}'", device_name, device_id.0, user_id.0);
             }
             IdentityAction::Revoke { device_id } => {
+                let config = ngenorca_config::load_config(cli.config.as_deref())?;
+                let identity_db = config.data_dir.join("identity.db");
+                let manager = ngenorca_identity::IdentityManager::new(
+                    identity_db.to_str().unwrap_or("identity.db"),
+                )?;
+
                 println!("Revoking device: {device_id}");
-                println!("(Not yet implemented)");
+
+                // Try to find which user owns this device.
+                let users = manager.list_users()?;
+                let mut revoked = false;
+                for user in &users {
+                    if user.devices.iter().any(|d| d.device_id.0 == device_id) {
+                        let did = ngenorca_core::types::DeviceId(device_id.clone());
+                        manager.revoke_device(&user.user_id, &did)?;
+                        println!("✓ Device '{}' revoked from user '{}'", device_id, user.user_id.0);
+                        revoked = true;
+                        break;
+                    }
+                }
+                if !revoked {
+                    println!("✗ Device '{}' not found on any user", device_id);
+                }
             }
         },
 

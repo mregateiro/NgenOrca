@@ -54,20 +54,17 @@ pub enum SessionState {
 
 /// Agent thinking intensity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ThinkingLevel {
     Off,
     Minimal,
     Low,
+    #[default]
     Medium,
     High,
     Max,
 }
 
-impl Default for ThinkingLevel {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
 
 #[cfg(test)]
 mod tests {

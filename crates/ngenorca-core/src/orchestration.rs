@@ -161,6 +161,7 @@ pub struct SubAgentId {
 
 /// The routing strategy the orchestrator uses to pick a sub-agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum RoutingStrategy {
     /// The orchestrator LLM decides which sub-agent to use.
     LlmRouted,
@@ -171,14 +172,10 @@ pub enum RoutingStrategy {
     /// Minimise cost: always use the cheapest model that can handle the task.
     CostOptimized,
     /// Hybrid: rules → SLM classifier → LLM (cascading, as described in design).
+    #[default]
     Hybrid,
 }
 
-impl Default for RoutingStrategy {
-    fn default() -> Self {
-        Self::Hybrid
-    }
-}
 
 /// A routing decision made by the orchestrator for a specific task.
 #[derive(Debug, Clone, Serialize, Deserialize)]

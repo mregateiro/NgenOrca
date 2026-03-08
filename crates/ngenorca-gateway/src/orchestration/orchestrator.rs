@@ -244,8 +244,8 @@ impl HybridOrchestrator {
                     .evaluate(task, response, original_message)
                     .await?;
 
-                if let QualityVerdict::Accept { score: Some(s) } = &verdict {
-                    if *s >= 0.5 && *s < 0.7 {
+                if let QualityVerdict::Accept { score: Some(s) } = &verdict
+                    && *s >= 0.5 && *s < 0.7 {
                         // Borderline — get a second opinion from LLM
                         let model = self.config.agent.classifier.as_ref()
                             .map(|c| c.model.clone())
@@ -255,7 +255,6 @@ impl HybridOrchestrator {
                             .evaluate_with_provider(task, response, original_message, registry)
                             .await;
                     }
-                }
                 Ok((verdict, heur_method))
             }
             _ => {
@@ -365,29 +364,6 @@ impl HybridOrchestrator {
         }
 
         prompt
-    }
-
-    /// Build an orchestration record for learning (to be stored in memory).
-    pub fn build_record(
-        &self,
-        classification: TaskClassification,
-        routing: RoutingDecision,
-        quality: QualityVerdict,
-        quality_method: QualityMethod,
-        escalated: bool,
-        latency_ms: u64,
-        total_tokens: usize,
-    ) -> OrchestrationRecord {
-        OrchestrationRecord {
-            classification,
-            routing,
-            quality,
-            quality_method,
-            escalated,
-            latency_ms,
-            total_tokens,
-            timestamp: chrono::Utc::now(),
-        }
     }
 
     /// Execute the full orchestration pipeline:
@@ -580,15 +556,16 @@ impl HybridOrchestrator {
         let latency_ms = start.elapsed().as_millis() as u64;
 
         // ── Step 7: Build the orchestration record for analytics / learned routing ──
-        let record = self.build_record(
-            classification.clone(),
-            routing.clone(),
-            verdict.clone(),
+        let record = OrchestrationRecord {
+            classification: classification.clone(),
+            routing: routing.clone(),
+            quality: verdict.clone(),
             quality_method,
             escalated,
             latency_ms,
-            total_usage.total_tokens,
-        );
+            total_tokens: total_usage.total_tokens,
+            timestamp: chrono::Utc::now(),
+        };
 
         let content = final_response
             .content

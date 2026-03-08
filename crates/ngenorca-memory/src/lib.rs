@@ -188,18 +188,17 @@ impl MemoryManager {
             "my favorite ", "my favourite ",
         ];
         for pattern in pref_patterns {
-            if let Some(rest) = lower.find(pattern).and_then(|pos| {
+            if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
                 let end = remainder.find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
-                Some(remainder[..end].trim().to_string())
-            }) {
-                if rest.len() >= 3 {
+                remainder[..end].trim().to_string()
+            })
+                && rest.len() >= 3 {
                     facts.push((semantic::FactCategory::Preference, format!("User {pattern}{rest}")));
                 }
-            }
         }
 
         // Technical preferences: "I use X", "I work with X", "I'm using X"
@@ -208,18 +207,17 @@ impl MemoryManager {
             "my stack ", "i code in ", "i program in ",
         ];
         for pattern in tech_patterns {
-            if let Some(rest) = lower.find(pattern).and_then(|pos| {
+            if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
                 let end = remainder.find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
-                Some(remainder[..end].trim().to_string())
-            }) {
-                if rest.len() >= 2 {
+                remainder[..end].trim().to_string()
+            })
+                && rest.len() >= 2 {
                     facts.push((semantic::FactCategory::TechnicalPreference, format!("User {pattern}{rest}")));
                 }
-            }
         }
 
         // Personal info: "My name is X", "I am a X", "I live in X"
@@ -229,18 +227,17 @@ impl MemoryManager {
             "i work as ", "my job is ",
         ];
         for pattern in personal_patterns {
-            if let Some(rest) = lower.find(pattern).and_then(|pos| {
+            if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
                 let end = remainder.find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
-                Some(remainder[..end].trim().to_string())
-            }) {
-                if rest.len() >= 2 {
+                remainder[..end].trim().to_string()
+            })
+                && rest.len() >= 2 {
                     facts.push((semantic::FactCategory::PersonalInfo, format!("User {pattern}{rest}")));
                 }
-            }
         }
 
         // Goals: "I want to X", "my goal is X", "I'm trying to X"
@@ -249,18 +246,17 @@ impl MemoryManager {
             "i need to learn ", "i'm learning ",
         ];
         for pattern in goal_patterns {
-            if let Some(rest) = lower.find(pattern).and_then(|pos| {
+            if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
                 let end = remainder.find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
-                Some(remainder[..end].trim().to_string())
-            }) {
-                if rest.len() >= 3 {
+                remainder[..end].trim().to_string()
+            })
+                && rest.len() >= 3 {
                     facts.push((semantic::FactCategory::Goal, format!("User {pattern}{rest}")));
                 }
-            }
         }
 
         facts

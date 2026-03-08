@@ -335,8 +335,8 @@ impl ChannelAdapter for TelegramAdapter {
 
                                     if let Some(msg) = &update.message {
                                         // Check user permission.
-                                        if let Some(user) = &msg.from {
-                                            if !allowed_users.is_empty()
+                                        if let Some(user) = &msg.from
+                                            && !allowed_users.is_empty()
                                                 && !allowed_users.contains(&user.id)
                                             {
                                                 debug!(
@@ -345,7 +345,6 @@ impl ChannelAdapter for TelegramAdapter {
                                                 );
                                                 continue;
                                             }
-                                        }
 
                                         if let Some(ngen_msg) =
                                             TelegramAdapter::telegram_message_to_ngenorca(msg)

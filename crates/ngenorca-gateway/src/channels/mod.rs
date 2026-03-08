@@ -48,14 +48,14 @@ pub async fn register_adapters(
     {
         let adapter = webchat::WebChatAdapter::new();
         registry
-            .register(Box::new(adapter), serde_json::json!({}))
+            .register_channel_adapter(Box::new(adapter), serde_json::json!({}))
             .await?;
         info!("WebChat adapter registered");
     }
 
     // Telegram Bot adapter.
-    if let Some(tg_cfg) = &channels.telegram {
-        if tg_cfg.enabled {
+    if let Some(tg_cfg) = &channels.telegram
+        && tg_cfg.enabled {
             if let Some(token) = &tg_cfg.bot_token {
                 let adapter = telegram::TelegramAdapter::new(
                     token.clone(),
@@ -64,17 +64,16 @@ pub async fn register_adapters(
                     tg_cfg.allowed_users.clone(),
                 );
                 let cfg_json = serde_json::to_value(tg_cfg).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Telegram adapter registered");
             } else {
                 tracing::warn!("Telegram enabled but no bot_token configured — skipping");
             }
         }
-    }
 
     // Discord Bot adapter.
-    if let Some(dc) = &channels.discord {
-        if dc.enabled {
+    if let Some(dc) = &channels.discord
+        && dc.enabled {
             if let Some(token) = &dc.bot_token {
                 let adapter = discord::DiscordAdapter::new(
                     token.clone(),
@@ -82,17 +81,16 @@ pub async fn register_adapters(
                     dc.command_prefix.clone().or_else(|| Some("!".into())),
                 );
                 let cfg_json = serde_json::to_value(dc).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Discord adapter registered");
             } else {
                 tracing::warn!("Discord enabled but no bot_token configured — skipping");
             }
         }
-    }
 
     // Slack Bot adapter.
-    if let Some(sl) = &channels.slack {
-        if sl.enabled {
+    if let Some(sl) = &channels.slack
+        && sl.enabled {
             if let Some(token) = &sl.bot_token {
                 let adapter = slack::SlackAdapter::new(
                     token.clone(),
@@ -100,17 +98,16 @@ pub async fn register_adapters(
                     sl.socket_mode,
                 );
                 let cfg_json = serde_json::to_value(sl).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Slack adapter registered");
             } else {
                 tracing::warn!("Slack enabled but no bot_token configured — skipping");
             }
         }
-    }
 
     // WhatsApp Cloud API adapter.
-    if let Some(wa) = &channels.whatsapp {
-        if wa.enabled {
+    if let Some(wa) = &channels.whatsapp
+        && wa.enabled {
             if let Some(token) = &wa.access_token {
                 let adapter = whatsapp::WhatsAppAdapter::new(
                     wa.phone_number_id.clone().unwrap_or_default(),
@@ -119,17 +116,16 @@ pub async fn register_adapters(
                     wa.webhook_path.clone(),
                 );
                 let cfg_json = serde_json::to_value(wa).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("WhatsApp adapter registered");
             } else {
                 tracing::warn!("WhatsApp enabled but no access_token configured — skipping");
             }
         }
-    }
 
     // Signal adapter (via signal-cli).
-    if let Some(sg) = &channels.signal {
-        if sg.enabled {
+    if let Some(sg) = &channels.signal
+        && sg.enabled {
             if let Some(phone) = &sg.phone_number {
                 let adapter = signal::SignalAdapter::new(
                     phone.clone(),
@@ -138,17 +134,16 @@ pub async fn register_adapters(
                     sg.mode.clone(),
                 );
                 let cfg_json = serde_json::to_value(sg).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Signal adapter registered");
             } else {
                 tracing::warn!("Signal enabled but no phone_number configured — skipping");
             }
         }
-    }
 
     // Matrix adapter.
-    if let Some(mx) = &channels.matrix {
-        if mx.enabled {
+    if let Some(mx) = &channels.matrix
+        && mx.enabled {
             if let Some(token) = &mx.access_token {
                 let adapter = matrix::MatrixAdapter::new(
                     mx.homeserver.clone().unwrap_or_else(|| "https://matrix.org".into()),
@@ -159,17 +154,16 @@ pub async fn register_adapters(
                     mx.encrypted,
                 );
                 let cfg_json = serde_json::to_value(mx).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Matrix adapter registered");
             } else {
                 tracing::warn!("Matrix enabled but no access_token configured — skipping");
             }
         }
-    }
 
     // Microsoft Teams adapter.
-    if let Some(tm) = &channels.teams {
-        if tm.enabled {
+    if let Some(tm) = &channels.teams
+        && tm.enabled {
             if let Some(app_id) = &tm.app_id {
                 let adapter = teams::TeamsAdapter::new(
                     app_id.clone(),
@@ -178,13 +172,12 @@ pub async fn register_adapters(
                     tm.webhook_url.clone(),
                 );
                 let cfg_json = serde_json::to_value(tm).unwrap_or_default();
-                registry.register(Box::new(adapter), cfg_json).await?;
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Teams adapter registered");
             } else {
                 tracing::warn!("Teams enabled but no app_id configured — skipping");
             }
         }
-    }
 
     Ok(())
 }

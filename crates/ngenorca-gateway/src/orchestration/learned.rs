@@ -68,7 +68,7 @@ impl LearnedRouter {
                      WHERE intent = ?1 AND domain = ?2 AND confidence >= 0.5
                      ORDER BY confidence DESC LIMIT 1",
                     params![intent_str, domain],
-                    |row| Self::row_to_rule(row),
+                    Self::row_to_rule,
                 );
                 if let Ok(rule) = result {
                     return Ok(Some(rule));
@@ -83,7 +83,7 @@ impl LearnedRouter {
              WHERE intent = ?1 AND domain IS NULL AND confidence >= 0.5
              ORDER BY confidence DESC LIMIT 1",
             params![intent_str],
-            |row| Self::row_to_rule(row),
+            Self::row_to_rule,
         );
 
         match result {
@@ -178,7 +178,7 @@ impl LearnedRouter {
         ).map_err(|e| Error::Database(e.to_string()))?;
 
         let rules: Vec<LearnedRoutingRule> = stmt
-            .query_map([], |row| Self::row_to_rule(row))
+            .query_map([], Self::row_to_rule)
             .map_err(|e| Error::Database(e.to_string()))?
             .filter_map(|r| r.ok())
             .collect();

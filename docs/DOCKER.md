@@ -276,6 +276,7 @@ docker compose up -d
 
 ## Next Steps
 
+- **Portainer deployment:** [docs/PORTAINER.md](PORTAINER.md) — deploy via the Portainer web UI
 - **NAS/Homelab deployment:** [docs/NAS_DEPLOYMENT.md](NAS_DEPLOYMENT.md) — nginx + Authelia + WireGuard
 - **Full configuration reference:** [docs/CONFIGURATION_GUIDE.md](CONFIGURATION_GUIDE.md)
 - **Channel setup (Telegram, Discord, etc.):** See the channels section in the config guide

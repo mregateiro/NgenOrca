@@ -55,13 +55,12 @@ impl SessionManager {
                     .read()
                     .map_err(|e| Error::Gateway(format!("Session lock: {e}")))?;
 
-                if let Some(session) = sessions.get(session_id) {
-                    if session.state == SessionState::Active || session.state == SessionState::Idle
+                if let Some(session) = sessions.get(session_id)
+                    && (session.state == SessionState::Active || session.state == SessionState::Idle)
                     {
                         debug!(session_id = %session_id, "Reusing existing session");
                         return Ok(session_id.clone());
                     }
-                }
             }
         }
 

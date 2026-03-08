@@ -12,7 +12,7 @@ use ngenorca_core::message::Message;
 use ngenorca_core::types::PluginId;
 use ngenorca_core::{Error, Result};
 use ngenorca_plugin_sdk::{
-    flume_like, AgentTool, Plugin, PluginContext, ToolDefinition,
+    flume_like, AgentTool, ChannelAdapter, Plugin, PluginContext, ToolDefinition,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,8 +38,10 @@ pub struct PluginRegistry {
     plugins: RwLock<Vec<RegisteredPlugin>>,
     /// Agent tools indexed by name for fast lookup.
     tools: RwLock<HashMap<String, Arc<dyn AgentTool>>>,
-    /// Channel adapters indexed by channel kind.
-    adapters: RwLock<HashMap<String, usize>>, // index into plugins vec
+    /// Channel adapters stored with their full ChannelAdapter trait.
+    channel_adapters: RwLock<Vec<ChannelAdapterEntry>>,
+    /// Channel adapter index lookup (plugin id → index into channel_adapters vec).
+    adapter_index: RwLock<HashMap<String, usize>>,
     /// Event sender for plugins to emit events back to the bus.
     event_tx: tokio::sync::mpsc::UnboundedSender<Event>,
     /// Data directory root for plugin storage.
@@ -50,6 +52,15 @@ struct RegisteredPlugin {
     #[allow(dead_code)]
     id: PluginId,
     plugin: Box<dyn Plugin>,
+    healthy: bool,
+}
+
+/// A channel adapter registered with its full `ChannelAdapter` trait preserved.
+struct ChannelAdapterEntry {
+    #[allow(dead_code)]
+    id: PluginId,
+    name: String,
+    adapter: Arc<dyn ChannelAdapter>,
     healthy: bool,
 }
 
@@ -66,7 +77,8 @@ impl PluginRegistry {
         Self {
             plugins: RwLock::new(Vec::new()),
             tools: RwLock::new(HashMap::new()),
-            adapters: RwLock::new(HashMap::new()),
+            channel_adapters: RwLock::new(Vec::new()),
+            adapter_index: RwLock::new(HashMap::new()),
             event_tx,
             data_dir,
         }
@@ -113,24 +125,90 @@ impl PluginRegistry {
 
         // Store the plugin
         let mut plugins = self.plugins.write().await;
-        let index = plugins.len();
         plugins.push(RegisteredPlugin {
             id: PluginId(id.clone()),
             plugin,
             healthy: true,
         });
 
-        // If it declares adapter roles, register the channel mapping
-        match manifest.kind {
-            ngenorca_core::plugin::PluginKind::ChannelAdapter => {
-                let mut adapters = self.adapters.write().await;
-                adapters.insert(id.clone(), index);
-                info!(plugin = %name, "Registered as channel adapter");
-            }
-            _ => {}
-        }
+        Ok(())
+    }
+
+    /// Register and initialize a channel adapter.
+    ///
+    /// Unlike `register()`, this preserves the `ChannelAdapter` trait so
+    /// `start_listening()` and `send_message()` can be called later.
+    pub async fn register_channel_adapter(
+        &self,
+        mut adapter: Box<dyn ChannelAdapter>,
+        config: serde_json::Value,
+    ) -> Result<()> {
+        let manifest = adapter.manifest();
+        let id = manifest.id.0.clone();
+        let name = manifest.name.clone();
+        let version = manifest.version.clone();
+
+        info!(
+            id = %id,
+            name = %name,
+            version = %version,
+            kind = ?manifest.kind,
+            "Loading channel adapter"
+        );
+
+        let plugin_data_dir = self.data_dir.join(&id);
+        std::fs::create_dir_all(&plugin_data_dir).ok();
+
+        let ctx = PluginContext {
+            sender: flume_like::Sender::new(self.event_tx.clone()),
+            config,
+            data_dir: plugin_data_dir,
+        };
+
+        adapter.init(ctx).await.map_err(|e| {
+            error!(plugin = %name, error = %e, "Channel adapter init failed");
+            e
+        })?;
+
+        info!(plugin = %name, "Channel adapter initialized");
+
+        let adapter: Arc<dyn ChannelAdapter> = Arc::from(adapter);
+
+        let mut adapters_vec = self.channel_adapters.write().await;
+        let mut idx_map = self.adapter_index.write().await;
+        let index = adapters_vec.len();
+        adapters_vec.push(ChannelAdapterEntry {
+            id: PluginId(id.clone()),
+            name: name.clone(),
+            adapter,
+            healthy: true,
+        });
+        idx_map.insert(id, index);
+        info!(plugin = %name, "Registered as channel adapter");
 
         Ok(())
+    }
+
+    /// Start listener loops for all registered channel adapters.
+    ///
+    /// Each adapter's `start_listening()` is spawned as an independent task.
+    /// Errors are logged but do not prevent other adapters from starting.
+    pub async fn start_all_adapters(&self) {
+        let adapters = self.channel_adapters.read().await;
+        for entry in adapters.iter() {
+            let adapter = entry.adapter.clone();
+            let name = entry.name.clone();
+            tokio::spawn(async move {
+                info!(adapter = %name, "Starting channel adapter listener");
+                if let Err(e) = adapter.start_listening().await {
+                    warn!(
+                        adapter = %name,
+                        error = %e,
+                        "Channel adapter listener failed or not yet implemented"
+                    );
+                }
+            });
+        }
     }
 
     /// Register an agent tool.
@@ -190,30 +268,28 @@ impl PluginRegistry {
 
     /// Route a message to the appropriate channel adapter.
     pub async fn route_to_adapter(&self, channel_kind: &str, message: &Message) -> Result<()> {
-        let adapters = self.adapters.read().await;
-        let index = adapters
+        let idx_map = self.adapter_index.read().await;
+        let index = idx_map
             .get(channel_kind)
             .ok_or_else(|| Error::NotFound(format!("No adapter for channel: {channel_kind}")))?;
 
-        let plugins = self.plugins.read().await;
-        if let Some(entry) = plugins.get(*index) {
-            match entry.plugin.handle_message(message).await {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    error!(adapter = %channel_kind, error = %e, "Adapter message handling failed");
-                    Err(e)
-                }
-            }
+        let adapters = self.channel_adapters.read().await;
+        if let Some(entry) = adapters.get(*index) {
+            entry.adapter.send_message(message).await.map_err(|e| {
+                error!(adapter = %channel_kind, error = %e, "Adapter send_message failed");
+                e
+            })
         } else {
             Err(Error::NotFound(format!("Adapter index out of bounds: {index}")))
         }
     }
 
-    /// Run health checks on all plugins.
+    /// Run health checks on all plugins and channel adapters.
     pub async fn health_check_all(&self) -> Vec<PluginEntry> {
-        let mut plugins = self.plugins.write().await;
         let mut results = Vec::new();
 
+        // Check general plugins.
+        let mut plugins = self.plugins.write().await;
         for entry in plugins.iter_mut() {
             let manifest = entry.plugin.manifest();
             let healthy = match entry.plugin.health_check().await {
@@ -239,11 +315,40 @@ impl PluginRegistry {
                 kind: format!("{:?}", manifest.kind),
             });
         }
+        drop(plugins);
+
+        // Check channel adapters.
+        let mut adapters = self.channel_adapters.write().await;
+        for entry in adapters.iter_mut() {
+            let manifest = entry.adapter.manifest();
+            let healthy = match entry.adapter.health_check().await {
+                Ok(()) => {
+                    entry.healthy = true;
+                    true
+                }
+                Err(e) => {
+                    warn!(
+                        adapter = %entry.name,
+                        error = %e,
+                        "Channel adapter health check failed"
+                    );
+                    entry.healthy = false;
+                    false
+                }
+            };
+
+            results.push(PluginEntry {
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                healthy,
+                kind: format!("{:?}", manifest.kind),
+            });
+        }
 
         results
     }
 
-    /// Gracefully shut down all plugins.
+    /// Gracefully shut down all plugins and channel adapters.
     pub async fn shutdown_all(&self) {
         let plugins = self.plugins.read().await;
         for entry in plugins.iter() {
@@ -258,23 +363,50 @@ impl PluginRegistry {
                 debug!(plugin = %manifest.name, "Plugin shut down");
             }
         }
+        drop(plugins);
+
+        let adapters = self.channel_adapters.read().await;
+        for entry in adapters.iter() {
+            if let Err(e) = entry.adapter.shutdown().await {
+                warn!(
+                    adapter = %entry.name,
+                    error = %e,
+                    "Channel adapter shutdown error"
+                );
+            } else {
+                debug!(adapter = %entry.name, "Channel adapter shut down");
+            }
+        }
     }
 
-    /// List all loaded plugins.
+    /// List all loaded plugins and channel adapters.
     pub async fn list_plugins(&self) -> Vec<PluginEntry> {
+        let mut results = Vec::new();
+
         let plugins = self.plugins.read().await;
-        plugins
-            .iter()
-            .map(|entry| {
-                let manifest = entry.plugin.manifest();
-                PluginEntry {
-                    name: manifest.name.clone(),
-                    version: manifest.version.clone(),
-                    healthy: entry.healthy,
-                    kind: format!("{:?}", manifest.kind),
-                }
-            })
-            .collect()
+        for entry in plugins.iter() {
+            let manifest = entry.plugin.manifest();
+            results.push(PluginEntry {
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                healthy: entry.healthy,
+                kind: format!("{:?}", manifest.kind),
+            });
+        }
+        drop(plugins);
+
+        let adapters = self.channel_adapters.read().await;
+        for entry in adapters.iter() {
+            let manifest = entry.adapter.manifest();
+            results.push(PluginEntry {
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                healthy: entry.healthy,
+                kind: format!("{:?}", manifest.kind),
+            });
+        }
+
+        results
     }
 
     /// Get the number of registered tools.
@@ -282,9 +414,9 @@ impl PluginRegistry {
         self.tools.read().await.len()
     }
 
-    /// Get the number of loaded plugins.
+    /// Get the number of loaded plugins (general plugins + channel adapters).
     pub async fn plugin_count(&self) -> usize {
-        self.plugins.read().await.len()
+        self.plugins.read().await.len() + self.channel_adapters.read().await.len()
     }
 
     /// Check if a specific tool is available.

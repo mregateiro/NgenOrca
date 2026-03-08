@@ -13,13 +13,12 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-const ANTHROPIC_API_VERSION: &str = "2023-06-01";
-
 /// Anthropic Claude provider.
 pub struct AnthropicProvider {
     client: Client,
     base_url: String,
     api_key: String,
+    api_version: String,
     default_max_tokens: Option<usize>,
     default_temperature: Option<f64>,
 }
@@ -28,6 +27,7 @@ impl AnthropicProvider {
     pub fn new(
         base_url: &str,
         api_key: String,
+        api_version: String,
         default_max_tokens: Option<usize>,
         default_temperature: Option<f64>,
     ) -> Self {
@@ -35,6 +35,7 @@ impl AnthropicProvider {
             client: Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
+            api_version,
             default_max_tokens,
             default_temperature,
         }
@@ -231,7 +232,7 @@ impl ModelProvider for AnthropicProvider {
             .client
             .post(&url)
             .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_API_VERSION)
+            .header("anthropic-version", &self.api_version)
             .header("content-type", "application/json")
             .json(&anthropic_req)
             .send()
@@ -305,7 +306,7 @@ mod tests {
 
     #[test]
     fn provider_name() {
-        let p = AnthropicProvider::new("https://api.anthropic.com", "sk-test".into(), None, None);
+        let p = AnthropicProvider::new("https://api.anthropic.com", "sk-test".into(), "2023-06-01".into(), None, None);
         assert_eq!(p.provider_name(), "anthropic");
     }
 
@@ -350,7 +351,7 @@ mod tests {
     #[test]
     fn static_model_list() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let p = AnthropicProvider::new("https://api.anthropic.com", "sk-test".into(), None, None);
+        let p = AnthropicProvider::new("https://api.anthropic.com", "sk-test".into(), "2023-06-01".into(), None, None);
         let models = rt.block_on(p.list_models()).unwrap();
         assert!(models.len() >= 3);
         assert!(models.iter().any(|m| m.id.contains("sonnet")));

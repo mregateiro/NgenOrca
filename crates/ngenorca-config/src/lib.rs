@@ -22,6 +22,26 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::info;
 
+/// Redact a secret for safe Debug output.
+/// Shows `"[REDACTED len=N]"` if present, `"None"` if absent.
+fn redact_option(secret: &Option<String>) -> String {
+    match secret {
+        Some(s) => format!("[REDACTED len={}]", s.len()),
+        None => "None".into(),
+    }
+}
+
+/// Redact a required secret for safe Debug output.
+#[allow(dead_code)]
+fn redact(secret: &str) -> String {
+    format!("[REDACTED len={}]", secret.len())
+}
+
+/// Redact a Vec of secrets.
+fn redact_vec(secrets: &[String]) -> String {
+    format!("[{} tokens REDACTED]", secrets.len())
+}
+
 /// Top-level NgenOrca configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NgenOrcaConfig {
@@ -60,7 +80,7 @@ pub struct NgenOrcaConfig {
 
 // ─── Gateway ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// Address to bind the gateway to.
     #[serde(default = "default_bind")]
@@ -115,6 +135,57 @@ pub struct GatewayConfig {
     /// Rate limit window in seconds.
     #[serde(default = "default_rate_limit_window_secs")]
     pub rate_limit_window_secs: u64,
+
+    /// Session time-to-live in seconds (default: 7200 = 2 hours).
+    #[serde(default = "default_session_ttl_secs")]
+    pub session_ttl_secs: u64,
+
+    /// How often to prune expired sessions, in seconds (default: 300 = 5 min).
+    #[serde(default = "default_session_prune_interval_secs")]
+    pub session_prune_interval_secs: u64,
+
+    /// Event log retention in days (default: 7).
+    #[serde(default = "default_event_log_retention_days")]
+    pub event_log_retention_days: u64,
+
+    /// How often to prune the event log, in seconds (default: 21600 = 6 hours).
+    #[serde(default = "default_event_log_prune_interval_secs")]
+    pub event_log_prune_interval_secs: u64,
+
+    /// CORS allowed origins. Empty = permissive (allow all).
+    /// Example: ["https://my-ui.example.com", "http://localhost:3000"]
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+
+    /// Maximum chat message length in characters (0 = unlimited, default: 32768).
+    #[serde(default = "default_max_message_length")]
+    pub max_message_length: usize,
+}
+
+impl std::fmt::Debug for GatewayConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayConfig")
+            .field("bind", &self.bind)
+            .field("port", &self.port)
+            .field("auth_mode", &self.auth_mode)
+            .field("proxy_user_header", &self.proxy_user_header)
+            .field("proxy_email_header", &self.proxy_email_header)
+            .field("proxy_groups_header", &self.proxy_groups_header)
+            .field("auth_password", &redact_option(&self.auth_password))
+            .field("auth_tokens", &redact_vec(&self.auth_tokens))
+            .field("tls_cert", &self.tls_cert)
+            .field("tls_key", &self.tls_key)
+            .field("tls_ca", &self.tls_ca)
+            .field("rate_limit_max", &self.rate_limit_max)
+            .field("rate_limit_window_secs", &self.rate_limit_window_secs)
+            .field("session_ttl_secs", &self.session_ttl_secs)
+            .field("session_prune_interval_secs", &self.session_prune_interval_secs)
+            .field("event_log_retention_days", &self.event_log_retention_days)
+            .field("event_log_prune_interval_secs", &self.event_log_prune_interval_secs)
+            .field("cors_allowed_origins", &self.cors_allowed_origins)
+            .field("max_message_length", &self.max_message_length)
+            .finish()
+    }
 }
 
 // ─── Agent / LLM Providers ──────────────────────────────────────
@@ -187,7 +258,7 @@ pub struct ProvidersConfig {
     pub custom: Option<CustomProviderConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AnthropicProviderConfig {
     /// Anthropic API key (prefer env var NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY).
     #[serde(default)]
@@ -196,6 +267,10 @@ pub struct AnthropicProviderConfig {
     /// Base URL (default: https://api.anthropic.com).
     #[serde(default = "default_anthropic_url")]
     pub base_url: String,
+
+    /// Anthropic API version header (default: "2023-06-01").
+    #[serde(default = "default_anthropic_api_version")]
+    pub api_version: String,
 
     /// Maximum tokens to generate.
     #[serde(default)]
@@ -206,7 +281,7 @@ pub struct AnthropicProviderConfig {
     pub temperature: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OpenAIProviderConfig {
     /// OpenAI API key (prefer env var).
     #[serde(default)]
@@ -244,7 +319,7 @@ pub struct OllamaProviderConfig {
     pub num_ctx: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AzureProviderConfig {
     /// Azure API key.
     #[serde(default)]
@@ -263,7 +338,7 @@ pub struct AzureProviderConfig {
     pub deployment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GoogleProviderConfig {
     /// Google AI API key.
     #[serde(default)]
@@ -274,7 +349,7 @@ pub struct GoogleProviderConfig {
     pub base_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OpenRouterProviderConfig {
     /// OpenRouter API key.
     #[serde(default)]
@@ -293,7 +368,7 @@ pub struct OpenRouterProviderConfig {
     pub fallback_models: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CustomProviderConfig {
     /// Base URL for any OpenAI-compatible API (vLLM, LM Studio, LocalAI, etc.).
     pub base_url: String,
@@ -305,6 +380,73 @@ pub struct CustomProviderConfig {
     /// Model name the server expects.
     #[serde(default)]
     pub model_name: Option<String>,
+}
+
+// ─── Provider Debug impls (redact API keys) ─────────────────────
+
+impl std::fmt::Debug for AnthropicProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicProviderConfig")
+            .field("api_key", &redact_option(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("api_version", &self.api_version)
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for OpenAIProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAIProviderConfig")
+            .field("api_key", &redact_option(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("organization", &self.organization)
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for AzureProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureProviderConfig")
+            .field("api_key", &redact_option(&self.api_key))
+            .field("endpoint", &self.endpoint)
+            .field("api_version", &self.api_version)
+            .field("deployment", &self.deployment)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for GoogleProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleProviderConfig")
+            .field("api_key", &redact_option(&self.api_key))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for OpenRouterProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenRouterProviderConfig")
+            .field("api_key", &redact_option(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("site_name", &self.site_name)
+            .field("fallback_models", &self.fallback_models)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CustomProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomProviderConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &redact_option(&self.api_key))
+            .field("model_name", &self.model_name)
+            .finish()
+    }
 }
 
 // ─── Multi-Agent Orchestration ───────────────────────────────────
@@ -489,7 +631,7 @@ pub struct WebChatChannelConfig {
     pub max_upload_size_mb: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TelegramChannelConfig {
     /// Enable Telegram adapter.
     #[serde(default)]
@@ -512,7 +654,7 @@ pub struct TelegramChannelConfig {
     pub allowed_users: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DiscordChannelConfig {
     /// Enable Discord adapter.
     #[serde(default)]
@@ -539,7 +681,7 @@ pub struct DiscordChannelConfig {
     pub command_prefix: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WhatsAppChannelConfig {
     /// Enable WhatsApp adapter.
     #[serde(default)]
@@ -566,7 +708,7 @@ pub struct WhatsAppChannelConfig {
     pub app_secret: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SlackChannelConfig {
     /// Enable Slack adapter.
     #[serde(default)]
@@ -616,7 +758,7 @@ pub struct SignalChannelConfig {
     pub mode: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MatrixChannelConfig {
     /// Enable Matrix adapter.
     #[serde(default)]
@@ -647,7 +789,7 @@ pub struct MatrixChannelConfig {
     pub encrypted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TeamsChannelConfig {
     /// Enable Microsoft Teams adapter.
     #[serde(default)]
@@ -668,6 +810,85 @@ pub struct TeamsChannelConfig {
     /// Webhook URL for incoming messages.
     #[serde(default)]
     pub webhook_url: Option<String>,
+}
+
+// ─── Channel Debug impls (redact tokens/secrets) ────────────────
+
+impl std::fmt::Debug for TelegramChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramChannelConfig")
+            .field("enabled", &self.enabled)
+            .field("bot_token", &redact_option(&self.bot_token))
+            .field("webhook_url", &self.webhook_url)
+            .field("polling", &self.polling)
+            .field("allowed_users", &self.allowed_users)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for DiscordChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordChannelConfig")
+            .field("enabled", &self.enabled)
+            .field("bot_token", &redact_option(&self.bot_token))
+            .field("application_id", &self.application_id)
+            .field("guild_ids", &self.guild_ids)
+            .field("allowed_roles", &self.allowed_roles)
+            .field("command_prefix", &self.command_prefix)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for WhatsAppChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WhatsAppChannelConfig")
+            .field("enabled", &self.enabled)
+            .field("phone_number_id", &self.phone_number_id)
+            .field("access_token", &redact_option(&self.access_token))
+            .field("verify_token", &redact_option(&self.verify_token))
+            .field("webhook_path", &self.webhook_path)
+            .field("app_secret", &redact_option(&self.app_secret))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SlackChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackChannelConfig")
+            .field("enabled", &self.enabled)
+            .field("bot_token", &redact_option(&self.bot_token))
+            .field("app_token", &redact_option(&self.app_token))
+            .field("signing_secret", &redact_option(&self.signing_secret))
+            .field("socket_mode", &self.socket_mode)
+            .field("channel_ids", &self.channel_ids)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for MatrixChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatrixChannelConfig")
+            .field("enabled", &self.enabled)
+            .field("homeserver", &self.homeserver)
+            .field("user_id", &self.user_id)
+            .field("access_token", &redact_option(&self.access_token))
+            .field("device_id", &self.device_id)
+            .field("auto_join", &self.auto_join)
+            .field("encrypted", &self.encrypted)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for TeamsChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeamsChannelConfig")
+            .field("enabled", &self.enabled)
+            .field("app_id", &self.app_id)
+            .field("app_password", &redact_option(&self.app_password))
+            .field("tenant_id", &self.tenant_id)
+            .field("webhook_url", &self.webhook_url)
+            .finish()
+    }
 }
 
 // ─── Identity ───────────────────────────────────────────────────
@@ -796,6 +1017,7 @@ fn default_proxy_user_header() -> String { "Remote-User".into() }
 fn default_proxy_email_header() -> String { "Remote-Email".into() }
 fn default_proxy_groups_header() -> String { "Remote-Groups".into() }
 fn default_anthropic_url() -> String { "https://api.anthropic.com".into() }
+fn default_anthropic_api_version() -> String { "2023-06-01".into() }
 fn default_openai_url() -> String { "https://api.openai.com/v1".into() }
 fn default_ollama_url() -> String { "http://127.0.0.1:11434".into() }
 fn default_azure_api_version() -> String { "2024-10-21".into() }
@@ -814,6 +1036,11 @@ fn default_cost_weight() -> u32 { 1 }
 fn default_priority() -> u32 { 10 }
 fn default_rate_limit_max() -> u32 { 60 }
 fn default_rate_limit_window_secs() -> u64 { 60 }
+fn default_session_ttl_secs() -> u64 { 7200 }
+fn default_session_prune_interval_secs() -> u64 { 300 }
+fn default_event_log_retention_days() -> u64 { 7 }
+fn default_event_log_prune_interval_secs() -> u64 { 21_600 }
+fn default_max_message_length() -> usize { 32_768 }
 fn default_webchat_theme() -> String { "dark".into() }
 fn default_upload_size() -> usize { 10 }
 fn default_whatsapp_webhook_path() -> String { "/webhooks/whatsapp".into() }
@@ -857,6 +1084,12 @@ impl Default for GatewayConfig {
             tls_ca: None,
             rate_limit_max: default_rate_limit_max(),
             rate_limit_window_secs: default_rate_limit_window_secs(),
+            session_ttl_secs: default_session_ttl_secs(),
+            session_prune_interval_secs: default_session_prune_interval_secs(),
+            event_log_retention_days: default_event_log_retention_days(),
+            event_log_prune_interval_secs: default_event_log_prune_interval_secs(),
+            cors_allowed_origins: vec![],
+            max_message_length: default_max_message_length(),
         }
     }
 }
@@ -1028,6 +1261,18 @@ impl NgenOrcaConfig {
         if self.gateway.rate_limit_window_secs == 0 && self.gateway.rate_limit_max > 0 {
             errors.push("gateway.rate_limit_window_secs must be > 0 when rate limiting is enabled".into());
         }
+        if self.gateway.session_ttl_secs == 0 {
+            warnings.push("gateway.session_ttl_secs is 0 — sessions will never expire".into());
+        }
+        if self.gateway.session_prune_interval_secs == 0 {
+            warnings.push("gateway.session_prune_interval_secs is 0 — session pruning will run in a tight loop".into());
+        }
+        if self.gateway.event_log_retention_days == 0 {
+            warnings.push("gateway.event_log_retention_days is 0 — event logs will be pruned immediately".into());
+        }
+        if self.gateway.event_log_prune_interval_secs == 0 {
+            warnings.push("gateway.event_log_prune_interval_secs is 0 — event log pruning will run in a tight loop".into());
+        }
 
         // Auth-mode-specific
         match &self.gateway.auth_mode {
@@ -1097,14 +1342,67 @@ impl NgenOrcaConfig {
         }
 
         // ── Channels ──
-        if let Some(tg) = &self.channels.telegram {
-            if tg.enabled && tg.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
+        if let Some(tg) = &self.channels.telegram
+            && tg.enabled && tg.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
                 errors.push("channels.telegram.bot_token is required when telegram is enabled".into());
             }
-        }
-        if let Some(dc) = &self.channels.discord {
-            if dc.enabled && dc.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
+        if let Some(dc) = &self.channels.discord
+            && dc.enabled && dc.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
                 errors.push("channels.discord.bot_token is required when discord is enabled".into());
+            }
+        if let Some(wa) = &self.channels.whatsapp
+            && wa.enabled && wa.access_token.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.whatsapp.access_token is required when whatsapp is enabled".into());
+            }
+        if let Some(sl) = &self.channels.slack
+            && sl.enabled && sl.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.slack.bot_token is required when slack is enabled".into());
+            }
+        if let Some(sg) = &self.channels.signal
+            && sg.enabled && sg.phone_number.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.signal.phone_number is required when signal is enabled".into());
+            }
+        if let Some(mx) = &self.channels.matrix
+            && mx.enabled && mx.access_token.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.matrix.access_token is required when matrix is enabled".into());
+            }
+        if let Some(tm) = &self.channels.teams
+            && tm.enabled && tm.app_id.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.teams.app_id is required when teams is enabled".into());
+            }
+
+        // ── Provider validation ──
+        let url_fields: Vec<(&str, &str)> = vec![
+            self.agent.providers.anthropic.as_ref().map(|p| ("agent.providers.anthropic.base_url", p.base_url.as_str())),
+            self.agent.providers.openai.as_ref().map(|p| ("agent.providers.openai.base_url", p.base_url.as_str())),
+            self.agent.providers.ollama.as_ref().map(|p| ("agent.providers.ollama.base_url", p.base_url.as_str())),
+            self.agent.providers.azure.as_ref().and_then(|p| p.endpoint.as_ref().map(|e| ("agent.providers.azure.endpoint", e.as_str()))),
+            self.agent.providers.google.as_ref().map(|p| ("agent.providers.google.base_url", p.base_url.as_str())),
+            self.agent.providers.openrouter.as_ref().map(|p| ("agent.providers.openrouter.base_url", p.base_url.as_str())),
+            self.agent.providers.custom.as_ref().map(|p| ("agent.providers.custom.base_url", p.base_url.as_str())),
+        ].into_iter().flatten().collect();
+
+        for (field, url) in &url_fields {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                errors.push(format!("{field} must start with http:// or https://, got \"{url}\""));
+            }
+        }
+
+        // Temperature range validation (0.0–2.0) for providers that set it
+        if let Some(p) = &self.agent.providers.anthropic {
+            if let Some(t) = p.temperature && !(0.0..=2.0).contains(&t) {
+                errors.push(format!("agent.providers.anthropic.temperature must be 0.0–2.0, got {t}"));
+            }
+            if p.max_tokens == Some(0) {
+                errors.push("agent.providers.anthropic.max_tokens must be > 0".into());
+            }
+        }
+        if let Some(p) = &self.agent.providers.openai {
+            if let Some(t) = p.temperature && !(0.0..=2.0).contains(&t) {
+                errors.push(format!("agent.providers.openai.temperature must be 0.0–2.0, got {t}"));
+            }
+            if p.max_tokens == Some(0) {
+                errors.push("agent.providers.openai.max_tokens must be > 0".into());
             }
         }
 
@@ -1588,5 +1886,121 @@ mod tests {
         cfg.gateway.rate_limit_window_secs = 0;
         let errs = cfg.validate().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("rate_limit_window_secs")));
+    }
+
+    #[test]
+    fn validate_catches_missing_whatsapp_token() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.whatsapp = Some(WhatsAppChannelConfig {
+            enabled: true,
+            phone_number_id: None,
+            access_token: None,
+            verify_token: None,
+            webhook_path: "/webhooks/whatsapp".into(),
+            app_secret: None,
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("whatsapp.access_token")));
+    }
+
+    #[test]
+    fn validate_catches_missing_slack_token() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.slack = Some(SlackChannelConfig {
+            enabled: true,
+            bot_token: None,
+            app_token: None,
+            signing_secret: None,
+            socket_mode: true,
+            channel_ids: vec![],
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("slack.bot_token")));
+    }
+
+    #[test]
+    fn validate_catches_missing_signal_phone() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.signal = Some(SignalChannelConfig {
+            enabled: true,
+            phone_number: None,
+            signal_cli_path: None,
+            data_path: None,
+            mode: "daemon".into(),
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("signal.phone_number")));
+    }
+
+    #[test]
+    fn validate_catches_missing_matrix_token() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.matrix = Some(MatrixChannelConfig {
+            enabled: true,
+            homeserver: None,
+            user_id: None,
+            access_token: None,
+            device_id: None,
+            auto_join: false,
+            encrypted: false,
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("matrix.access_token")));
+    }
+
+    #[test]
+    fn validate_catches_missing_teams_app_id() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.teams = Some(TeamsChannelConfig {
+            enabled: true,
+            app_id: None,
+            app_password: None,
+            tenant_id: "common".into(),
+            webhook_url: None,
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("teams.app_id")));
+    }
+
+    #[test]
+    fn validate_catches_bad_provider_url() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.providers.anthropic = Some(AnthropicProviderConfig {
+            api_key: Some("key".into()),
+            base_url: "not-a-url".into(),
+            api_version: "2023-06-01".into(),
+            max_tokens: None,
+            temperature: None,
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("base_url") && e.contains("http")));
+    }
+
+    #[test]
+    fn validate_catches_bad_temperature() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.providers.anthropic = Some(AnthropicProviderConfig {
+            api_key: Some("key".into()),
+            base_url: "https://api.anthropic.com".into(),
+            api_version: "2023-06-01".into(),
+            max_tokens: None,
+            temperature: Some(3.0),
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("temperature")));
+    }
+
+    #[test]
+    fn validate_catches_zero_max_tokens() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.providers.openai = Some(OpenAIProviderConfig {
+            api_key: Some("key".into()),
+            base_url: "https://api.openai.com/v1".into(),
+            organization: None,
+            max_tokens: Some(0),
+            temperature: None,
+        });
+        let errs = cfg.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_tokens")));
     }
 }

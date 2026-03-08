@@ -66,6 +66,7 @@ docker compose up -d
 ```
 
 See [docs/DOCKER.md](docs/DOCKER.md) for the full step-by-step guide (config, Ollama, auth, troubleshooting).
+Using Portainer? See [docs/PORTAINER.md](docs/PORTAINER.md) for the web-UI walkthrough.
 
 ### NAS / Homelab (with Authelia + nginx)
 
@@ -268,6 +269,12 @@ GitHub Actions workflows in `.github/workflows/`:
 | **Config Validation** | Pre-flight checks for ports, auth credentials, model names, thresholds, duplicate sub-agents |
 | **Graceful Shutdown** | Ctrl+C / SIGTERM → drain in-flight requests → shutdown plugins → clean exit |
 | **Ed25519 Device Signing** | Hardware-bound identity verification with `ring` Ed25519 signatures |
+
+## Community
+
+- [CHANGELOG.md](CHANGELOG.md) — Version history and release notes
+- [CONTRIBUTING.md](CONTRIBUTING.md) — How to contribute
+- [SECURITY.md](SECURITY.md) — Security policy and vulnerability reporting
 
 ## License
 

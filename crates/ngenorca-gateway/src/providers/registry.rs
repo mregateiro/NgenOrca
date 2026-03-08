@@ -46,6 +46,7 @@ impl ProviderRegistry {
                 let provider = Arc::new(AnthropicProvider::new(
                     &anthropic_cfg.base_url,
                     api_key.clone(),
+                    anthropic_cfg.api_version.clone(),
                     anthropic_cfg.max_tokens,
                     anthropic_cfg.temperature,
                 ));
@@ -74,8 +75,8 @@ impl ProviderRegistry {
         }
 
         // ── Azure OpenAI ──
-        if let Some(ref azure_cfg) = config.agent.providers.azure {
-            if let (Some(endpoint), Some(api_key)) =
+        if let Some(ref azure_cfg) = config.agent.providers.azure
+            && let (Some(endpoint), Some(api_key)) =
                 (&azure_cfg.endpoint, &azure_cfg.api_key)
             {
                 // Azure uses a different URL pattern:
@@ -100,11 +101,10 @@ impl ProviderRegistry {
                 providers.insert("azure".into(), provider);
                 info!("Registered provider: azure");
             }
-        }
 
         // ── Google Gemini ──
-        if let Some(ref google_cfg) = config.agent.providers.google {
-            if let Some(ref api_key) = google_cfg.api_key {
+        if let Some(ref google_cfg) = config.agent.providers.google
+            && let Some(ref api_key) = google_cfg.api_key {
                 // Google has its own API, but can work with OpenAI-compat via
                 // generativelanguage.googleapis.com/v1beta/openai
                 let base = format!(
@@ -120,11 +120,10 @@ impl ProviderRegistry {
                 providers.insert("google".into(), provider);
                 info!("Registered provider: google");
             }
-        }
 
         // ── OpenRouter ──
-        if let Some(ref or_cfg) = config.agent.providers.openrouter {
-            if let Some(ref api_key) = or_cfg.api_key {
+        if let Some(ref or_cfg) = config.agent.providers.openrouter
+            && let Some(ref api_key) = or_cfg.api_key {
                 let provider = Arc::new(OpenAICompatProvider::new(
                     &or_cfg.base_url,
                     Some(api_key.clone()),
@@ -134,7 +133,6 @@ impl ProviderRegistry {
                 providers.insert("openrouter".into(), provider);
                 info!("Registered provider: openrouter ({})", or_cfg.base_url);
             }
-        }
 
         // ── Custom ──
         if let Some(ref custom_cfg) = config.agent.providers.custom {
@@ -274,6 +272,7 @@ mod tests {
         config.agent.providers.anthropic = Some(ngenorca_config::AnthropicProviderConfig {
             api_key: Some("sk-test".into()),
             base_url: "https://api.anthropic.com".into(),
+            api_version: "2023-06-01".into(),
             max_tokens: None,
             temperature: None,
         });
@@ -288,6 +287,7 @@ mod tests {
         config.agent.providers.anthropic = Some(ngenorca_config::AnthropicProviderConfig {
             api_key: None,
             base_url: "https://api.anthropic.com".into(),
+            api_version: "2023-06-01".into(),
             max_tokens: None,
             temperature: None,
         });

@@ -15,6 +15,7 @@ pub mod orchestration;
 pub mod plugins;
 pub mod providers;
 pub mod rate_limit;
+pub mod request_id;
 pub mod routes;
 pub mod server;
 pub mod sessions;
@@ -100,17 +101,17 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
     let metrics_registry = metrics::Metrics::new();
 
     // Build shared application state.
-    let app_state = state::AppState::new(
-        config.clone(),
+    let app_state = state::AppState::new(state::AppStateParams {
+        config: config.clone(),
         event_bus,
         identity,
         memory,
         providers,
         sessions,
-        plugin_registry,
+        plugins: plugin_registry,
         learned_router,
-        metrics_registry,
-    );
+        metrics: metrics_registry,
+    });
 
     // Register channel adapters from config.
     channels::register_adapters(&config, app_state.plugins()).await?;
@@ -118,6 +119,10 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         adapters = ?config.enabled_channels(),
         "Channel adapters registered"
     );
+
+    // Start listener loops for all registered channel adapters.
+    // Each adapter's start_listening() is spawned as an independent task.
+    app_state.plugins().start_all_adapters().await;
 
     // Spawn background memory consolidation task.
     {
@@ -165,32 +170,40 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         );
     }
 
-    // Spawn background session pruning task (every 5 minutes, TTL = 2 hours).
+    // Spawn background session pruning task.
     {
         let state = app_state.clone();
+        let prune_interval = config.gateway.session_prune_interval_secs;
+        let session_ttl = config.gateway.session_ttl_secs;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(prune_interval));
             interval.tick().await; // Skip immediate first tick
             loop {
                 interval.tick().await;
-                let pruned = state.sessions().prune_expired(std::time::Duration::from_secs(7200));
+                let pruned = state.sessions().prune_expired(std::time::Duration::from_secs(session_ttl));
                 if pruned > 0 {
                     tracing::debug!(pruned, "Session pruning cycle complete");
                 }
             }
         });
-        info!("Session pruning task started (every 5m, TTL 2h)");
+        info!(
+            interval_secs = config.gateway.session_prune_interval_secs,
+            ttl_secs = config.gateway.session_ttl_secs,
+            "Session pruning task started",
+        );
     }
 
-    // Spawn background event log pruning task (every 6 hours, retain 7 days).
+    // Spawn background event log pruning task.
     {
         let state = app_state.clone();
+        let prune_interval = config.gateway.event_log_prune_interval_secs;
+        let retention_days = config.gateway.event_log_retention_days;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(prune_interval));
             interval.tick().await; // Skip immediate first tick
             loop {
                 interval.tick().await;
-                let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
                 match state.event_bus().event_log().prune_before(cutoff) {
                     Ok(deleted) => {
                         if deleted > 0 {
@@ -203,7 +216,11 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
                 }
             }
         });
-        info!("Event log pruning task started (every 6h, retain 7d)");
+        info!(
+            interval_secs = config.gateway.event_log_prune_interval_secs,
+            retention_days = config.gateway.event_log_retention_days,
+            "Event log pruning task started",
+        );
     }
 
     // Start the HTTP/WebSocket server (blocks until shutdown signal).

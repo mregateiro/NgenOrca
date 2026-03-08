@@ -157,7 +157,7 @@ impl TaskClassifier for RuleBasedClassifier {
                 let confidence = (pattern.confidence + (matched_count as f64 - 1.0) * 0.05)
                     .min(0.95);
 
-                if best_match.as_ref().map_or(true, |(_, c)| confidence > *c) {
+                if best_match.as_ref().is_none_or(|(_, c)| confidence > *c) {
                     best_match = Some((pattern, confidence));
                 }
             }

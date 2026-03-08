@@ -17,6 +17,22 @@ pub struct AppState {
     inner: Arc<AppStateInner>,
 }
 
+/// Parameters for constructing [`AppState`].
+///
+/// Groups all required dependencies into a single struct so that
+/// `AppState::new` avoids the `clippy::too_many_arguments` warning.
+pub struct AppStateParams {
+    pub config: NgenOrcaConfig,
+    pub event_bus: EventBus,
+    pub identity: IdentityManager,
+    pub memory: MemoryManager,
+    pub providers: ProviderRegistry,
+    pub sessions: SessionManager,
+    pub plugins: PluginRegistry,
+    pub learned_router: LearnedRouter,
+    pub metrics: Metrics,
+}
+
 struct AppStateInner {
     pub config: NgenOrcaConfig,
     pub event_bus: EventBus,
@@ -31,28 +47,18 @@ struct AppStateInner {
 }
 
 impl AppState {
-    pub fn new(
-        config: NgenOrcaConfig,
-        event_bus: EventBus,
-        identity: IdentityManager,
-        memory: MemoryManager,
-        providers: ProviderRegistry,
-        sessions: SessionManager,
-        plugins: PluginRegistry,
-        learned_router: LearnedRouter,
-        metrics: Metrics,
-    ) -> Self {
+    pub fn new(params: AppStateParams) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
-                config,
-                event_bus,
-                identity,
-                memory,
-                providers,
-                sessions,
-                plugins,
-                learned_router,
-                metrics,
+                config: params.config,
+                event_bus: params.event_bus,
+                identity: params.identity,
+                memory: params.memory,
+                providers: params.providers,
+                sessions: params.sessions,
+                plugins: params.plugins,
+                learned_router: params.learned_router,
+                metrics: params.metrics,
                 start_time: std::time::Instant::now(),
             }),
         }
@@ -126,7 +132,17 @@ mod tests {
         let plugins = PluginRegistry::new(plugin_tx, std::path::PathBuf::from("/tmp/test_plugins"));
         let learned_router = LearnedRouter::new(":memory:").unwrap();
         let metrics = Metrics::new();
-        AppState::new(config, event_bus, identity, memory, providers, sessions, plugins, learned_router, metrics)
+        AppState::new(AppStateParams {
+            config,
+            event_bus,
+            identity,
+            memory,
+            providers,
+            sessions,
+            plugins,
+            learned_router,
+            metrics,
+        })
     }
 
     #[tokio::test]

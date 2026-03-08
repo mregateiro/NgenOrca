@@ -28,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(root))
         .route("/health", get(health))
         .route("/api/v1/status", get(status))
+        .route("/api/v1/version", get(version))
         .route("/api/v1/whoami", get(whoami))
         .route("/api/v1/providers", get(providers))
         .route("/api/v1/channels", get(channels))
@@ -77,6 +78,13 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "status": "healthy",
         "uptime_secs": uptime.as_secs(),
         "sandbox_environment": format!("{:?}", sandbox_env),
+    }))
+}
+
+/// Lightweight version endpoint — returns only the crate version string.
+async fn version() -> Json<serde_json::Value> {
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
     }))
 }
 
@@ -403,6 +411,17 @@ async fn chat(
         return Json(json!({ "error": "message cannot be empty" }));
     }
 
+    let max_len = state.config().gateway.max_message_length;
+    if max_len > 0 && body.message.len() > max_len {
+        return Json(json!({
+            "error": format!(
+                "message too long: {} chars (limit: {})",
+                body.message.len(),
+                max_len,
+            )
+        }));
+    }
+
     let user_id = caller.username.as_ref()
         .filter(|u| !u.is_empty())
         .map(|u| UserId(u.clone()));
@@ -440,8 +459,8 @@ async fn chat(
     let mut conversation = body.conversation.clone();
 
     // Inject memory context if available
-    if state.config().memory.enabled {
-        if let Some(ref uid) = user_id {
+    if state.config().memory.enabled
+        && let Some(ref uid) = user_id {
             let token_budget = state.config().memory.semantic_token_budget;
             match state
                 .memory()
@@ -499,7 +518,6 @@ async fn chat(
                 }
             }
         }
-    }
 
     // ── Store user message in working memory ──
     state.memory().working.push(
@@ -726,11 +744,10 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
                 state.metrics().inc_ws_messages_in();
                 if let Err(done) = handle_client_message(
                     &msg, &state, &mut sender, user_id.as_ref(), display_user,
-                ).await {
-                    if done {
+                ).await
+                    && done {
                         break;
                     }
-                }
             }
 
             // Arm 2: Events pushed from the EventBus (broadcast to all WS clients)
@@ -745,11 +762,10 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
                             payload: serde_json::to_value(&bus_event.payload).ok(),
                             timestamp: bus_event.timestamp.to_rfc3339(),
                         };
-                        if let Ok(json) = serde_json::to_string(&ws_event) {
-                            if sender.send(WsMessage::Text(json.into())).await.is_err() {
+                        if let Ok(json) = serde_json::to_string(&ws_event)
+                            && sender.send(WsMessage::Text(json.into())).await.is_err() {
                                 break; // Client disconnected
                             }
-                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!(lagged = n, "WS event subscriber lagged, skipping events");
@@ -796,6 +812,27 @@ async fn handle_client_message(
     };
 
     if ws_msg.message.trim().is_empty() {
+        return Err(false);
+    }
+
+    // Enforce max message length
+    let max_len = state.config().gateway.max_message_length;
+    if max_len > 0 && ws_msg.message.len() > max_len {
+        let err_resp = WsChatResponse {
+            msg_type: "error".into(),
+            content: None,
+            session_id: None,
+            served_by: None,
+            error: Some(format!(
+                "message too long: {} chars (limit: {})",
+                ws_msg.message.len(),
+                max_len,
+            )),
+            latency_ms: None,
+        };
+        if let Ok(json) = serde_json::to_string(&err_resp) {
+            let _ = sender.send(WsMessage::Text(json.into())).await;
+        }
         return Err(false);
     }
 
@@ -930,11 +967,10 @@ async fn handle_client_message(
         }
     };
 
-    if let Ok(json) = serde_json::to_string(&response) {
-        if sender.send(WsMessage::Text(json.into())).await.is_err() {
+    if let Ok(json) = serde_json::to_string(&response)
+        && sender.send(WsMessage::Text(json.into())).await.is_err() {
             return Err(true); // Client disconnected
         }
-    }
 
     Ok(())
 }

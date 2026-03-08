@@ -17,6 +17,12 @@ pub struct WebChatAdapter {
     _initialized: bool,
 }
 
+impl Default for WebChatAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebChatAdapter {
     pub fn new() -> Self {
         Self {
