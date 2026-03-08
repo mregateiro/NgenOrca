@@ -404,20 +404,20 @@ flowchart LR
 flowchart TB
   subgraph NgenOrcaSystem[NgenOrca]
     C1[Gateway Container]
-    C2[Memory/Identity Stores (SQLite)]
+    C2[Memory and Identity Stores - SQLite]
     C3[Plugin Runtime]
   end
   IdP[Authelia or EntraID]
-  Proxy[Reverse Proxy]
-  LLM[LLM Provider(s)]
-  User[Client]
+  RP2[Reverse Proxy]
+  LLM2[LLM Providers]
+  USER2[Client]
 
-  User --> Proxy
-  Proxy <--> IdP
-  Proxy --> C1
+  USER2 --> RP2
+  RP2 <--> IdP
+  RP2 --> C1
   C1 --> C2
   C1 --> C3
-  C1 --> LLM
+  C1 --> LLM2
 ```
 
 ## 6.2 ArchiMate-Style Layered View (Conceptual)

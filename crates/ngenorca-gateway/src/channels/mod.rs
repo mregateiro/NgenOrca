@@ -105,11 +105,29 @@ pub async fn register_adapters(
             }
         }
 
-    // WhatsApp Cloud API adapter.
+    // WhatsApp adapter (Baileys bridge or Cloud API).
     if let Some(wa) = &channels.whatsapp
         && wa.enabled {
-            if let Some(token) = &wa.access_token {
-                let adapter = whatsapp::WhatsAppAdapter::new(
+            // Baileys mode takes precedence when bridge_path is provided.
+            if let Some(bridge_path) = &wa.bridge_path {
+                let data_dir = wa.data_path.clone().unwrap_or_else(|| {
+                    let home = std::env::var("HOME")
+                        .or_else(|_| std::env::var("USERPROFILE"))
+                        .unwrap_or_else(|_| ".".into());
+                    let mut p = std::path::PathBuf::from(home);
+                    p.push(".ngenorca");
+                    p.push("whatsapp-data");
+                    p
+                });
+                let adapter = whatsapp::WhatsAppAdapter::baileys(
+                    bridge_path.clone(),
+                    data_dir,
+                );
+                let cfg_json = serde_json::to_value(wa).unwrap_or_default();
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
+                info!("WhatsApp adapter registered (Baileys mode)");
+            } else if let Some(token) = &wa.access_token {
+                let adapter = whatsapp::WhatsAppAdapter::cloud_api(
                     wa.phone_number_id.clone().unwrap_or_default(),
                     token.clone(),
                     wa.verify_token.clone().unwrap_or_default(),
@@ -117,9 +135,9 @@ pub async fn register_adapters(
                 );
                 let cfg_json = serde_json::to_value(wa).unwrap_or_default();
                 registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
-                info!("WhatsApp adapter registered");
+                info!("WhatsApp adapter registered (Cloud API mode)");
             } else {
-                tracing::warn!("WhatsApp enabled but no access_token configured — skipping");
+                tracing::warn!("WhatsApp enabled but no bridge_path or access_token configured — skipping");
             }
         }
 

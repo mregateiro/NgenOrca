@@ -174,6 +174,8 @@ Full reference: [`config/config.example.toml`](config/config.example.toml)
 Guides:
 - [Configuration Guide](docs/CONFIGURATION_GUIDE.md) — all providers, channels, and settings
 - [NAS Deployment](docs/NAS_DEPLOYMENT.md) — WireGuard + nginx + Authelia setup
+- [Enterprise Readiness Checklist](docs/ENTERPRISE_READINESS_CHECKLIST.md) — security, compliance, and operations hardening tracker
+- [Enterprise Architecture Diagrams](docs/ENTERPRISE_ARCHITECTURE_DIAGRAMS.md) — TOGAF functional/technical views + C4/ArchiMate alternatives
 
 ## API Endpoints
 

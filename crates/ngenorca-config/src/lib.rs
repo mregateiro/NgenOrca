@@ -687,25 +687,36 @@ pub struct WhatsAppChannelConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Phone Number ID from Meta developer dashboard.
+    /// Phone Number ID from Meta developer dashboard (Cloud API only, optional).
     #[serde(default)]
     pub phone_number_id: Option<String>,
 
-    /// Permanent access token.
+    /// Permanent access token (Cloud API only, optional).
     #[serde(default)]
     pub access_token: Option<String>,
 
-    /// Webhook verification token (you choose this).
+    /// Webhook verification token (Cloud API only, optional).
     #[serde(default)]
     pub verify_token: Option<String>,
 
-    /// Webhook path the gateway listens on.
+    /// Webhook path the gateway listens on (Cloud API only).
     #[serde(default = "default_whatsapp_webhook_path")]
     pub webhook_path: String,
 
-    /// App secret for webhook signature verification.
+    /// App secret for webhook signature verification (Cloud API only).
     #[serde(default)]
     pub app_secret: Option<String>,
+
+    /// Path to the Node.js Baileys bridge script (Baileys mode).
+    /// When set, the adapter uses Baileys (WhatsApp Web protocol) instead of Cloud API.
+    /// This means no webhook/public URL is needed.
+    #[serde(default)]
+    pub bridge_path: Option<std::path::PathBuf>,
+
+    /// Data directory for Baileys auth/session store.
+    /// Defaults to `~/.ngenorca/whatsapp-data` if not set.
+    #[serde(default)]
+    pub data_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -848,6 +859,8 @@ impl std::fmt::Debug for WhatsAppChannelConfig {
             .field("verify_token", &redact_option(&self.verify_token))
             .field("webhook_path", &self.webhook_path)
             .field("app_secret", &redact_option(&self.app_secret))
+            .field("bridge_path", &self.bridge_path)
+            .field("data_path", &self.data_path)
             .finish()
     }
 }
@@ -1351,8 +1364,10 @@ impl NgenOrcaConfig {
                 errors.push("channels.discord.bot_token is required when discord is enabled".into());
             }
         if let Some(wa) = &self.channels.whatsapp
-            && wa.enabled && wa.access_token.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.whatsapp.access_token is required when whatsapp is enabled".into());
+            && wa.enabled
+            && wa.bridge_path.is_none()
+            && wa.access_token.as_ref().is_none_or(|t| t.is_empty()) {
+                errors.push("channels.whatsapp: either bridge_path (Baileys) or access_token (Cloud API) is required when enabled".into());
             }
         if let Some(sl) = &self.channels.slack
             && sl.enabled && sl.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
@@ -1889,7 +1904,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_catches_missing_whatsapp_token() {
+    fn validate_catches_missing_whatsapp_config() {
         let mut cfg = NgenOrcaConfig::default();
         cfg.channels.whatsapp = Some(WhatsAppChannelConfig {
             enabled: true,
@@ -1898,9 +1913,31 @@ mod tests {
             verify_token: None,
             webhook_path: "/webhooks/whatsapp".into(),
             app_secret: None,
+            bridge_path: None,
+            data_path: None,
         });
         let errs = cfg.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("whatsapp.access_token")));
+        assert!(errs.iter().any(|e| e.contains("whatsapp")));
+    }
+
+    #[test]
+    fn validate_whatsapp_baileys_passes() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.channels.whatsapp = Some(WhatsAppChannelConfig {
+            enabled: true,
+            phone_number_id: None,
+            access_token: None,
+            verify_token: None,
+            webhook_path: "/webhooks/whatsapp".into(),
+            app_secret: None,
+            bridge_path: Some(std::path::PathBuf::from("bridges/whatsapp-baileys/bridge.js")),
+            data_path: None,
+        });
+        // Should not fail on whatsapp validation (may fail on other things)
+        let result = cfg.validate();
+        if let Err(errs) = result {
+            assert!(!errs.iter().any(|e| e.contains("whatsapp")));
+        }
     }
 
     #[test]
