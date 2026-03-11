@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use subtle::ConstantTimeEq;
+
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS: u64 = 30;
 
@@ -74,6 +76,19 @@ impl TelegramAdapter {
     #[allow(dead_code)]
     fn is_user_allowed(&self, user_id: i64) -> bool {
         self.allowed_users.is_empty() || self.allowed_users.contains(&user_id)
+    }
+
+    /// SEC-05: Verify a Telegram webhook request.
+    ///
+    /// When setting up a webhook, Telegram lets you specify a `secret_token`.
+    /// Telegram sends it back in every webhook request as the
+    /// `X-Telegram-Bot-Api-Secret-Token` header.  We verify using
+    /// constant-time comparison.
+    #[allow(dead_code)]
+    pub fn verify_webhook_secret(&self, header_value: &str, expected_secret: &str) -> bool {
+        let a = header_value.as_bytes();
+        let b = expected_secret.as_bytes();
+        a.len() == b.len() && a.ct_eq(b).into()
     }
 
     /// Convert a Telegram update into an NgenOrca Message.

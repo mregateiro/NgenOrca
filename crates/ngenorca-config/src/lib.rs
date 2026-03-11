@@ -160,6 +160,17 @@ pub struct GatewayConfig {
     /// Maximum chat message length in characters (0 = unlimited, default: 32768).
     #[serde(default = "default_max_message_length")]
     pub max_message_length: usize,
+
+    /// SEC-03: Allowed source IPs for TrustedProxy mode.
+    ///
+    /// When `auth_mode = "TrustedProxy"`, identity headers (`Remote-User`, etc.)
+    /// are only trusted when the TCP connection originates from one of these IPs
+    /// or CIDR ranges (e.g. `"10.0.0.0/8"`, `"172.16.0.0/12"`).
+    /// Connections from any other source are rejected with 403.
+    ///
+    /// Default: `["127.0.0.1", "::1"]` (loopback only).
+    #[serde(default = "default_trusted_proxy_sources")]
+    pub trusted_proxy_sources: Vec<String>,
 }
 
 impl std::fmt::Debug for GatewayConfig {
@@ -184,6 +195,7 @@ impl std::fmt::Debug for GatewayConfig {
             .field("event_log_prune_interval_secs", &self.event_log_prune_interval_secs)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("max_message_length", &self.max_message_length)
+            .field("trusted_proxy_sources", &self.trusted_proxy_sources)
             .finish()
     }
 }
@@ -707,14 +719,9 @@ pub struct WhatsAppChannelConfig {
     #[serde(default)]
     pub app_secret: Option<String>,
 
-    /// Path to the Node.js Baileys bridge script (Baileys mode).
-    /// When set, the adapter uses Baileys (WhatsApp Web protocol) instead of Cloud API.
-    /// This means no webhook/public URL is needed.
-    #[serde(default)]
-    pub bridge_path: Option<std::path::PathBuf>,
-
-    /// Data directory for Baileys auth/session store.
+    /// Data directory for WhatsApp session/credential storage.
     /// Defaults to `~/.ngenorca/whatsapp-data` if not set.
+    /// Used by the native pure-Rust client (default mode).
     #[serde(default)]
     pub data_path: Option<std::path::PathBuf>,
 }
@@ -859,7 +866,6 @@ impl std::fmt::Debug for WhatsAppChannelConfig {
             .field("verify_token", &redact_option(&self.verify_token))
             .field("webhook_path", &self.webhook_path)
             .field("app_secret", &redact_option(&self.app_secret))
-            .field("bridge_path", &self.bridge_path)
             .field("data_path", &self.data_path)
             .finish()
     }
@@ -1054,6 +1060,9 @@ fn default_session_prune_interval_secs() -> u64 { 300 }
 fn default_event_log_retention_days() -> u64 { 7 }
 fn default_event_log_prune_interval_secs() -> u64 { 21_600 }
 fn default_max_message_length() -> usize { 32_768 }
+fn default_trusted_proxy_sources() -> Vec<String> {
+    vec!["127.0.0.1".into(), "::1".into()]
+}
 fn default_webchat_theme() -> String { "dark".into() }
 fn default_upload_size() -> usize { 10 }
 fn default_whatsapp_webhook_path() -> String { "/webhooks/whatsapp".into() }
@@ -1103,6 +1112,7 @@ impl Default for GatewayConfig {
             event_log_prune_interval_secs: default_event_log_prune_interval_secs(),
             cors_allowed_origins: vec![],
             max_message_length: default_max_message_length(),
+            trusted_proxy_sources: default_trusted_proxy_sources(),
         }
     }
 }
@@ -1363,12 +1373,8 @@ impl NgenOrcaConfig {
             && dc.enabled && dc.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
                 errors.push("channels.discord.bot_token is required when discord is enabled".into());
             }
-        if let Some(wa) = &self.channels.whatsapp
-            && wa.enabled
-            && wa.bridge_path.is_none()
-            && wa.access_token.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.whatsapp: either bridge_path (Baileys) or access_token (Cloud API) is required when enabled".into());
-            }
+        // WhatsApp: Native mode (no access_token) is always valid.
+        // No special validation needed — native mode works with just enabled=true.
         if let Some(sl) = &self.channels.slack
             && sl.enabled && sl.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
                 errors.push("channels.slack.bot_token is required when slack is enabled".into());
@@ -1904,7 +1910,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_catches_missing_whatsapp_config() {
+    fn validate_whatsapp_native_mode_passes() {
         let mut cfg = NgenOrcaConfig::default();
         cfg.channels.whatsapp = Some(WhatsAppChannelConfig {
             enabled: true,
@@ -1913,27 +1919,9 @@ mod tests {
             verify_token: None,
             webhook_path: "/webhooks/whatsapp".into(),
             app_secret: None,
-            bridge_path: None,
             data_path: None,
         });
-        let errs = cfg.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("whatsapp")));
-    }
-
-    #[test]
-    fn validate_whatsapp_baileys_passes() {
-        let mut cfg = NgenOrcaConfig::default();
-        cfg.channels.whatsapp = Some(WhatsAppChannelConfig {
-            enabled: true,
-            phone_number_id: None,
-            access_token: None,
-            verify_token: None,
-            webhook_path: "/webhooks/whatsapp".into(),
-            app_secret: None,
-            bridge_path: Some(std::path::PathBuf::from("bridges/whatsapp-baileys/bridge.js")),
-            data_path: None,
-        });
-        // Should not fail on whatsapp validation (may fail on other things)
+        // Native mode (no access_token) should pass validation.
         let result = cfg.validate();
         if let Err(errs) = result {
             assert!(!errs.iter().any(|e| e.contains("whatsapp")));

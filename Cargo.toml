@@ -8,6 +8,7 @@ members = [
     "crates/ngenorca-plugin-sdk",
     "crates/ngenorca-sandbox",
     "crates/ngenorca-gateway",
+    "crates/ngenorca-whatsapp-web",
     "crates/ngenorca-cli",
 ]
 resolver = "2"
@@ -40,7 +41,23 @@ rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
 
 # Crypto
 ring = "0.17"
+subtle = "2"
 base64 = "0.22"
+curve25519-dalek = { version = "4", features = ["serde"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "serde"] }
+ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
+aes = "0.8"
+aes-gcm = "0.10"
+cbc = { version = "0.1", features = ["alloc"] }
+hmac = "0.12"
+sha2 = "0.10"
+hkdf = "0.12"
+rand = "0.8"
+prost = "0.13"
+qrcode = "0.14"
+
+# JWT / JWKS verification
+jsonwebtoken = "9"
 
 # HTTP / WebSocket
 axum = { version = "0.8", features = ["ws"] }
@@ -89,6 +106,7 @@ ngenorca-memory = { path = "crates/ngenorca-memory" }
 ngenorca-plugin-sdk = { path = "crates/ngenorca-plugin-sdk" }
 ngenorca-sandbox = { path = "crates/ngenorca-sandbox" }
 ngenorca-gateway = { path = "crates/ngenorca-gateway" }
+ngenorca-whatsapp-web = { path = "crates/ngenorca-whatsapp-web" }
 
 [profile.release]
 lto = true

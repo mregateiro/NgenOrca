@@ -96,6 +96,7 @@ pub async fn register_adapters(
                     token.clone(),
                     sl.app_token.clone(),
                     sl.socket_mode,
+                    sl.signing_secret.clone(),
                 );
                 let cfg_json = serde_json::to_value(sl).unwrap_or_default();
                 registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
@@ -105,11 +106,23 @@ pub async fn register_adapters(
             }
         }
 
-    // WhatsApp adapter (Baileys bridge or Cloud API).
+    // WhatsApp adapter (Native pure-Rust or Cloud API).
     if let Some(wa) = &channels.whatsapp
         && wa.enabled {
-            // Baileys mode takes precedence when bridge_path is provided.
-            if let Some(bridge_path) = &wa.bridge_path {
+            // Cloud API mode when access_token is provided.
+            if let Some(token) = &wa.access_token {
+                let adapter = whatsapp::WhatsAppAdapter::cloud_api(
+                    wa.phone_number_id.clone().unwrap_or_default(),
+                    token.clone(),
+                    wa.verify_token.clone().unwrap_or_default(),
+                    wa.webhook_path.clone(),
+                    wa.app_secret.clone(),
+                );
+                let cfg_json = serde_json::to_value(wa).unwrap_or_default();
+                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
+                info!("WhatsApp adapter registered (Cloud API mode)");
+            } else {
+                // Native mode (default) — pure Rust, no Node.js needed.
                 let data_dir = wa.data_path.clone().unwrap_or_else(|| {
                     let home = std::env::var("HOME")
                         .or_else(|_| std::env::var("USERPROFILE"))
@@ -119,25 +132,10 @@ pub async fn register_adapters(
                     p.push("whatsapp-data");
                     p
                 });
-                let adapter = whatsapp::WhatsAppAdapter::baileys(
-                    bridge_path.clone(),
-                    data_dir,
-                );
+                let adapter = whatsapp::WhatsAppAdapter::native(data_dir);
                 let cfg_json = serde_json::to_value(wa).unwrap_or_default();
                 registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
-                info!("WhatsApp adapter registered (Baileys mode)");
-            } else if let Some(token) = &wa.access_token {
-                let adapter = whatsapp::WhatsAppAdapter::cloud_api(
-                    wa.phone_number_id.clone().unwrap_or_default(),
-                    token.clone(),
-                    wa.verify_token.clone().unwrap_or_default(),
-                    wa.webhook_path.clone(),
-                );
-                let cfg_json = serde_json::to_value(wa).unwrap_or_default();
-                registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
-                info!("WhatsApp adapter registered (Cloud API mode)");
-            } else {
-                tracing::warn!("WhatsApp enabled but no bridge_path or access_token configured — skipping");
+                info!("WhatsApp adapter registered (Native mode — pure Rust)");
             }
         }
 
@@ -192,6 +190,12 @@ pub async fn register_adapters(
                 let cfg_json = serde_json::to_value(tm).unwrap_or_default();
                 registry.register_channel_adapter(Box::new(adapter), cfg_json).await?;
                 info!("Teams adapter registered");
+                tracing::warn!(
+                    "⚠ SEC-05: Teams webhook uses structural JWT validation only — \
+                     issuer/audience/signature are NOT verified. Deploy behind a \
+                     network firewall or Azure Front Door until full JWKS validation \
+                     is implemented (see teams.rs TODO)."
+                );
             } else {
                 tracing::warn!("Teams enabled but no app_id configured — skipping");
             }

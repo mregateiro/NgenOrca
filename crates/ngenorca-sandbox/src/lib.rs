@@ -787,8 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn exec_timeout_works() {
-        let mut policy = SandboxPolicy::default();
-        policy.wall_timeout_secs = 1; // 1 second timeout
+        let policy = SandboxPolicy { wall_timeout_secs: 1, ..SandboxPolicy::default() };
         // "ping -n 30 127.0.0.1" will take ~30 seconds on Windows
         let result = sandboxed_exec("ping", &["-n", "30", "127.0.0.1"], &policy).await;
         assert!(result.is_ok());

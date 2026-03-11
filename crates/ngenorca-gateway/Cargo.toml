@@ -34,3 +34,8 @@ parking_lot = { workspace = true }
 futures = { workspace = true }
 tokio-tungstenite = { workspace = true }
 urlencoding = { workspace = true }
+ngenorca-whatsapp-web = { workspace = true }
+subtle = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+jsonwebtoken = { workspace = true }

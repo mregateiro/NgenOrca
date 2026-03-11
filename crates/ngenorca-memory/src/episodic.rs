@@ -307,6 +307,20 @@ impl EpisodicMemory {
             .collect();
         Ok(users)
     }
+
+    /// PRIV-03: Delete **all** episodic entries for a user.
+    ///
+    /// Returns the number of rows deleted.
+    pub fn delete_for_user(&self, user_id: &UserId) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM episodic_entries WHERE user_id = ?1",
+                params![user_id.0],
+            )
+            .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(deleted)
+    }
 }
 
 /// Tokenise text into lowercase keywords (≥ 2 chars, deduplicated).

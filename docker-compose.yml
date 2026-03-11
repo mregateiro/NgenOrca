@@ -3,6 +3,12 @@
 # Quick start:     docker compose up -d
 # NAS / homelab:   docker compose -f docker-compose.nas.yml up -d
 #
+# ⚠️  SECURITY WARNING: This file publishes the gateway port directly.
+# It is intended for LOCAL DEVELOPMENT and TESTING ONLY.
+# For enterprise / production / NAS deployments, use docker-compose.nas.yml
+# which uses `expose:` + a reverse-proxy (nginx + Authelia) instead of
+# `ports:`, ensuring the backend is never directly reachable by clients.
+#
 # All-in-one mode: runs the core gateway with adapters in one container.
 # Split mode:      uncomment individual adapter services below.
 

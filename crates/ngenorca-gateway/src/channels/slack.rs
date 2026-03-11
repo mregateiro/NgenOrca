@@ -26,12 +26,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+type HmacSha256 = Hmac<Sha256>;
+
 const SLACK_API: &str = "https://slack.com/api";
 
 /// Slack Bot adapter.
 pub struct SlackAdapter {
     bot_token: String,
     app_token: Option<String>,
+    /// Signing secret for verifying incoming webhook requests (Events API).
+    #[allow(dead_code)]
+    pub(crate) signing_secret: Option<String>,
     socket_mode: bool,
     sender: Option<flume_like::Sender>,
     running: Arc<AtomicBool>,
@@ -39,15 +46,62 @@ pub struct SlackAdapter {
 }
 
 impl SlackAdapter {
-    pub fn new(bot_token: String, app_token: Option<String>, socket_mode: bool) -> Self {
+    pub fn new(
+        bot_token: String,
+        app_token: Option<String>,
+        socket_mode: bool,
+        signing_secret: Option<String>,
+    ) -> Self {
         Self {
             bot_token,
             app_token,
+            signing_secret,
             socket_mode,
             sender: None,
             running: Arc::new(AtomicBool::new(false)),
             client: reqwest::Client::new(),
         }
+    }
+
+    /// SEC-05: Verify a Slack Events API webhook request.
+    ///
+    /// Slack sends `X-Slack-Signature` = `v0=<HMAC-SHA256(signing_secret, "v0:{ts}:{body}")>`
+    /// and `X-Slack-Request-Timestamp` headers.
+    ///
+    /// Returns `true` if the signature is valid.
+    #[allow(dead_code)]
+    pub fn verify_webhook_signature(
+        signing_secret: &str,
+        timestamp: &str,
+        body: &[u8],
+        signature_header: &str,
+    ) -> bool {
+        let expected_hex = match signature_header.strip_prefix("v0=") {
+            Some(hex) => hex,
+            None => return false,
+        };
+
+        // Reject timestamps older than 5 minutes to prevent replay attacks.
+        if let Ok(ts) = timestamp.parse::<i64>() {
+            let now = chrono::Utc::now().timestamp();
+            if (now - ts).abs() > 300 {
+                return false;
+            }
+        }
+
+        let basestring = format!("v0:{timestamp}:{}", String::from_utf8_lossy(body));
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(signing_secret.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(basestring.as_bytes());
+        let result = mac.finalize().into_bytes();
+        let computed: String = result.iter().map(|b| format!("{b:02x}")).collect();
+
+        // Constant-time comparison via the hmac crate's internals + string equality
+        // length check. For defense-in-depth, use subtle for the hex string compare.
+        use subtle::ConstantTimeEq;
+        let a = computed.as_bytes();
+        let b = expected_hex.as_bytes();
+        a.len() == b.len() && a.ct_eq(b).into()
     }
 
     /// Open a Socket Mode connection and return the WSS URL.
@@ -410,7 +464,7 @@ mod tests {
     use super::*;
 
     fn make_adapter() -> SlackAdapter {
-        SlackAdapter::new("xoxb-test-token".into(), Some("xapp-test".into()), true)
+        SlackAdapter::new("xoxb-test-token".into(), Some("xapp-test".into()), true, None)
     }
 
     #[test]

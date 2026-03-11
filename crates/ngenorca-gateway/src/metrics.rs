@@ -21,6 +21,8 @@ struct MetricsInner {
     http_errors_total: AtomicU64,
     /// Total WebSocket connections opened.
     ws_connections_total: AtomicU64,
+    /// Currently active WebSocket connections (gauge).
+    ws_connections_active: AtomicU64,
     /// Total WebSocket messages received from clients.
     ws_messages_in_total: AtomicU64,
 
@@ -53,6 +55,7 @@ impl Metrics {
                 http_requests_total: AtomicU64::new(0),
                 http_errors_total: AtomicU64::new(0),
                 ws_connections_total: AtomicU64::new(0),
+                ws_connections_active: AtomicU64::new(0),
                 ws_messages_in_total: AtomicU64::new(0),
                 orchestrations_total: AtomicU64::new(0),
                 escalations_total: AtomicU64::new(0),
@@ -76,6 +79,17 @@ impl Metrics {
 
     pub fn inc_ws_connections(&self) {
         self.inner.ws_connections_total.fetch_add(1, Ordering::Relaxed);
+        self.inner.ws_connections_active.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement the active WS connection gauge (called on disconnect).
+    pub fn dec_ws_connections(&self) {
+        self.inner.ws_connections_active.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Current number of active WS connections.
+    pub fn ws_connections_active(&self) -> u64 {
+        self.inner.ws_connections_active.load(Ordering::Relaxed)
     }
 
     pub fn inc_ws_messages_in(&self) {
@@ -130,6 +144,12 @@ impl Metrics {
             "ngenorca_ws_connections_total",
             "Total WebSocket connections opened",
             i.ws_connections_total.load(Ordering::Relaxed),
+        );
+        prom_gauge(
+            &mut buf,
+            "ngenorca_ws_connections_active",
+            "Currently active WebSocket connections",
+            i.ws_connections_active.load(Ordering::Relaxed),
         );
         prom_counter(
             &mut buf,
@@ -212,6 +232,22 @@ fn prom_counter(buf: &mut String, name: &str, help: &str, value: u64) {
     buf.push_str("# TYPE ");
     buf.push_str(name);
     buf.push_str(" counter\n");
+    buf.push_str(name);
+    buf.push(' ');
+    buf.push_str(&value.to_string());
+    buf.push('\n');
+}
+
+/// Write a single Prometheus gauge line.
+fn prom_gauge(buf: &mut String, name: &str, help: &str, value: u64) {
+    buf.push_str("# HELP ");
+    buf.push_str(name);
+    buf.push(' ');
+    buf.push_str(help);
+    buf.push('\n');
+    buf.push_str("# TYPE ");
+    buf.push_str(name);
+    buf.push_str(" gauge\n");
     buf.push_str(name);
     buf.push(' ');
     buf.push_str(&value.to_string());

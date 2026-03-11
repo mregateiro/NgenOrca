@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────
+# cargo-deny configuration — SCM-01
+#
+# Run:  cargo deny check
+# CI:   cargo deny --all-features check advisories bans licenses sources
+# ─────────────────────────────────────────────────────────
+
+[graph]
+targets = []              # check all targets
+all-features = false
+no-default-features = false
+
+# ── Advisory database ────────────────────────────────────
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+ignore = []
+
+# ── License allow-list ───────────────────────────────────
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OpenSSL",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+copyleft = "deny"
+allow-osi-fsf-free = "neither"
+default = "deny"
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+# ── Duplicate crate detection ────────────────────────────
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# ── Source restrictions ──────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

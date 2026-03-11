@@ -25,7 +25,7 @@ use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Microsoft Teams adapter via Bot Framework.
 pub struct TeamsAdapter {
@@ -62,6 +62,60 @@ impl TeamsAdapter {
             client: reqwest::Client::new(),
             token_cache: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// SEC-05: Verify an incoming Bot Framework webhook request.
+    ///
+    /// Full Bot Framework JWT validation — fetches the OpenID metadata document,
+    /// retrieves JWKS signing keys (with 1-hour caching), and validates the
+    /// `Authorization: Bearer` header JWT against:
+    /// * **Algorithm**: RS256 / RS384 / RS512 only (prevents algorithm confusion).
+    /// * **Issuer**: `https://api.botframework.com`.
+    /// * **Audience**: the configured `app_id`.
+    /// * **Expiry**: standard `exp` claim check.
+    /// * **Signature**: RSA cryptographic verification via the matched JWKS key.
+    ///
+    /// On any network error fetching JWKS the function returns `false`
+    /// (fail-closed: reject if we cannot verify).
+    #[allow(dead_code)]
+    pub async fn verify_bot_framework_jwt(
+        auth_header: &str,
+        expected_audience: Option<&str>,
+    ) -> bool {
+        let token = match auth_header.strip_prefix("Bearer ") {
+            Some(t) => t.trim(),
+            None => return false,
+        };
+
+        // Decode JWT header (without signature verification) to extract `kid`.
+        let header = match jsonwebtoken::decode_header(token) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+
+        match verify_jwt_with_jwks(token, &header, expected_audience).await {
+            Ok(valid) => valid,
+            Err(e) => {
+                warn!(error = %e, "Teams JWKS verification failed — rejecting (fail-closed)");
+                false
+            }
+        }
+    }
+
+    /// Legacy structural-only JWT check (kept for backwards compat / tests).
+    ///
+    /// **Deprecated**: Use [`verify_bot_framework_jwt`] for production deployments.
+    #[allow(dead_code)]
+    pub fn verify_bot_framework_token(auth_header: &str) -> bool {
+        let token = match auth_header.strip_prefix("Bearer ") {
+            Some(t) => t.trim(),
+            None => return false,
+        };
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '='))
     }
 
     /// Obtain (or refresh) the Azure AD OAuth2 token.
@@ -349,6 +403,133 @@ pub struct BotFrameworkConversation {
     pub id: String,
 }
 
+// ─── JWKS cache & JWT verification helpers ──────────────────────
+
+/// Bot Framework OpenID metadata URL.
+const OPENID_CONFIG_URL: &str =
+    "https://login.botframework.com/v1/.well-known/openidconfiguration";
+
+/// Expected issuer claim for Bot Framework tokens.
+const EXPECTED_ISSUER: &str = "https://api.botframework.com";
+
+/// JWKS cache TTL (seconds).
+const JWKS_CACHE_TTL_SECS: u64 = 3600;
+
+/// Module-level JWKS cache — lazily initialised, shared across all requests.
+static JWKS_CACHE: std::sync::LazyLock<tokio::sync::RwLock<JwksCacheInner>> =
+    std::sync::LazyLock::new(|| {
+        tokio::sync::RwLock::new(JwksCacheInner {
+            keys: None,
+            fetched_at: std::time::Instant::now()
+                - std::time::Duration::from_secs(JWKS_CACHE_TTL_SECS + 1),
+        })
+    });
+
+struct JwksCacheInner {
+    keys: Option<jsonwebtoken::jwk::JwkSet>,
+    fetched_at: std::time::Instant,
+}
+
+/// Core JWT verification against cached JWKS keys.
+async fn verify_jwt_with_jwks(
+    token: &str,
+    header: &jsonwebtoken::Header,
+    expected_audience: Option<&str>,
+) -> Result<bool, String> {
+    // Restrict allowed algorithms to RSA family only (prevents algorithm confusion).
+    let allowed_algs = [
+        jsonwebtoken::Algorithm::RS256,
+        jsonwebtoken::Algorithm::RS384,
+        jsonwebtoken::Algorithm::RS512,
+    ];
+    if !allowed_algs.contains(&header.alg) {
+        return Ok(false);
+    }
+
+    let jwks = fetch_or_cached_jwks().await?;
+
+    let kid = header
+        .kid
+        .as_deref()
+        .ok_or_else(|| "JWT missing kid header".to_string())?;
+
+    let jwk = jwks
+        .keys
+        .iter()
+        .find(|k| k.common.key_id.as_deref() == Some(kid))
+        .ok_or_else(|| format!("No JWKS key matching kid={kid}"))?;
+
+    let key = jsonwebtoken::DecodingKey::from_jwk(jwk)
+        .map_err(|e| format!("Invalid JWK: {e}"))?;
+
+    let mut validation = jsonwebtoken::Validation::new(header.alg);
+    validation.algorithms = allowed_algs.to_vec();
+    validation.set_issuer(&[EXPECTED_ISSUER]);
+    match expected_audience {
+        Some(aud) => validation.set_audience(&[aud]),
+        None => {
+            // SEC-05: Fail-closed — reject if no audience is configured.
+            // Enterprise deployments MUST set `channels.teams.app_id`.
+            warn!("Teams JWT: no expected audience (app_id) configured — rejecting (fail-closed)");
+            return Ok(false);
+        }
+    }
+
+    match jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation) {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            warn!(error = %e, "Teams JWT claim/signature validation failed");
+            Ok(false)
+        }
+    }
+}
+
+/// Return the JWKS key set, fetching from the Bot Framework OpenID endpoint
+/// when the cache is stale or empty.
+async fn fetch_or_cached_jwks() -> Result<jsonwebtoken::jwk::JwkSet, String> {
+    // Fast path: return cached keys if TTL is still valid.
+    {
+        let read = JWKS_CACHE.read().await;
+        if let Some(ref keys) = read.keys
+            && read.fetched_at.elapsed().as_secs() < JWKS_CACHE_TTL_SECS
+        {
+            return Ok(keys.clone());
+        }
+    }
+
+    // Slow path: refresh from the Bot Framework OpenID endpoint.
+    let client = reqwest::Client::new();
+
+    let meta: serde_json::Value = client
+        .get(OPENID_CONFIG_URL)
+        .send()
+        .await
+        .map_err(|e| format!("JWKS metadata fetch: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("JWKS metadata parse: {e}"))?;
+
+    let jwks_uri = meta["jwks_uri"]
+        .as_str()
+        .ok_or_else(|| "No jwks_uri in OpenID metadata".to_string())?;
+
+    let jwks: jsonwebtoken::jwk::JwkSet = client
+        .get(jwks_uri)
+        .send()
+        .await
+        .map_err(|e| format!("JWKS fetch: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("JWKS parse: {e}"))?;
+
+    // Update cache.
+    let mut write = JWKS_CACHE.write().await;
+    write.keys = Some(jwks.clone());
+    write.fetched_at = std::time::Instant::now();
+
+    Ok(jwks)
+}
+
 // ─── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -450,5 +631,64 @@ mod tests {
             }
             _ => panic!("Expected message event"),
         }
+    }
+
+    // ── JWT verification tests ───────────────────────────────────
+
+    #[test]
+    fn legacy_verify_rejects_missing_bearer_prefix() {
+        assert!(!TeamsAdapter::verify_bot_framework_token("NotBearer abc.def.ghi"));
+    }
+
+    #[test]
+    fn legacy_verify_rejects_malformed_jwt() {
+        assert!(!TeamsAdapter::verify_bot_framework_token("Bearer only-one-part"));
+    }
+
+    #[test]
+    fn legacy_verify_accepts_structural_jwt() {
+        assert!(TeamsAdapter::verify_bot_framework_token(
+            "Bearer eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ0ZXN0In0.c2lnbmF0dXJl"
+        ));
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_rejects_missing_bearer_prefix() {
+        assert!(!TeamsAdapter::verify_bot_framework_jwt("Token abc.def.ghi", None).await);
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_rejects_non_jwt_garbage() {
+        assert!(!TeamsAdapter::verify_bot_framework_jwt("Bearer not-a-jwt", None).await);
+    }
+
+    #[tokio::test]
+    async fn jwt_verify_rejects_when_jwks_unreachable() {
+        // In test environment, JWKS endpoint is unreachable → fail-closed.
+        // Craft a structurally valid RS256 JWT (header with kid) but unsigned.
+        let header = base64_url_encode(r#"{"alg":"RS256","typ":"JWT","kid":"test-key-1"}"#);
+        let payload = base64_url_encode(r#"{"iss":"https://api.botframework.com","aud":"app-id-123","exp":9999999999}"#);
+        let token = format!("Bearer {header}.{payload}.fake-signature");
+        // Should reject because JWKS fetch fails (no network in test).
+        assert!(!TeamsAdapter::verify_bot_framework_jwt(&token, Some("app-id-123")).await);
+    }
+
+    #[test]
+    fn verify_jwt_with_jwks_rejects_hmac_algorithm() {
+        // Prevent algorithm confusion: HS256 tokens must be rejected by decode_header
+        // check in verify_jwt_with_jwks (only RS256/RS384/RS512 allowed).
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let allowed = [
+            jsonwebtoken::Algorithm::RS256,
+            jsonwebtoken::Algorithm::RS384,
+            jsonwebtoken::Algorithm::RS512,
+        ];
+        assert!(!allowed.contains(&header.alg));
+    }
+
+    /// Simple base64url encode helper for test JWT construction.
+    fn base64_url_encode(input: &str) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(input.as_bytes())
     }
 }

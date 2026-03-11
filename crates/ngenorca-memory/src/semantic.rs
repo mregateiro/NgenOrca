@@ -242,6 +242,20 @@ impl SemanticMemory {
             .map_err(|e| Error::Database(e.to_string()))?;
         Ok(count as u64)
     }
+
+    /// PRIV-03: Delete **all** semantic facts for a user.
+    ///
+    /// Returns the number of rows deleted.
+    pub fn delete_for_user(&self, user_id: &UserId) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM semantic_facts WHERE user_id = ?1",
+                params![user_id.0],
+            )
+            .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]

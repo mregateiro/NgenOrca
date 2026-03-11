@@ -14,6 +14,8 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use std::net::IpAddr;
+use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
 use crate::state::AppState;
@@ -65,7 +67,16 @@ pub async fn auth_middleware(
     // Docker healthchecks, Prometheus scrapers, and load-balancer probes
     // work without credentials.
     let path = request.uri().path();
-    if path == "/health" || path == "/metrics" || path == "/" {
+    // SEC-06: Exempt health/metrics/root AND webhook callback routes from
+    // authentication.  Webhooks carry their own per-channel signature
+    // verification (HMAC, JWT, etc.) and must remain reachable even in
+    // TrustedProxy mode where third-party providers cannot inject proxy
+    // identity headers.
+    if path == "/health"
+        || path == "/metrics"
+        || path == "/"
+        || path.starts_with("/webhooks/")
+    {
         request
             .extensions_mut()
             .insert(CallerIdentity::default());
@@ -85,6 +96,31 @@ pub async fn auth_middleware(
         }
 
         AuthMode::TrustedProxy => {
+            // SEC-03: Verify request originates from a trusted proxy IP.
+            // Only connections from IPs listed in `trusted_proxy_sources`
+            // are allowed to set identity headers.  Entries may be exact
+            // IPs ("127.0.0.1") or CIDR ranges ("10.0.0.0/8").
+            let allowed = &config.gateway.trusted_proxy_sources;
+            if !allowed.is_empty() {
+                let source_ip = request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|ci| ci.0.ip());
+
+                let is_trusted = source_ip
+                    .as_ref()
+                    .is_some_and(|ip| ip_matches_allowlist(ip, allowed));
+
+                if !is_trusted {
+                    warn!(
+                        source = ?source_ip,
+                        allowed = ?allowed,
+                        "TrustedProxy auth: source IP not in trusted_proxy_sources — rejecting"
+                    );
+                    return Err(StatusCode::FORBIDDEN);
+                }
+            }
+
             // Read identity from reverse proxy headers (Authelia/Authentik/etc.).
             let user_header = &config.gateway.proxy_user_header;
             let email_header = &config.gateway.proxy_email_header;
@@ -138,7 +174,12 @@ pub async fn auth_middleware(
                 .map(|s| s.trim());
 
             match token {
-                Some(t) if config.gateway.auth_tokens.iter().any(|valid| valid == t) => {
+                Some(t) if config.gateway.auth_tokens.iter().any(|valid| {
+                    // Constant-time comparison to prevent timing side-channels.
+                    let a = valid.as_bytes();
+                    let b = t.as_bytes();
+                    a.len() == b.len() && a.ct_eq(b).into()
+                }) => {
                     CallerIdentity {
                         username: Some("token-user".to_string()),
                         auth_method: AuthMethod::Token,
@@ -180,7 +221,12 @@ pub async fn auth_middleware(
                         .gateway
                         .auth_password
                         .as_ref()
-                        .is_some_and(|expected| expected == pass);
+                        .is_some_and(|expected| {
+                            // Constant-time comparison to prevent timing side-channels.
+                            let a = expected.as_bytes();
+                            let b = pass.as_bytes();
+                            a.len() == b.len() && a.ct_eq(b).into()
+                        });
 
                     if valid {
                         CallerIdentity {
@@ -217,6 +263,59 @@ pub async fn auth_middleware(
     request.extensions_mut().insert(identity);
 
     Ok(next.run(request).await)
+}
+
+// ─── CIDR-aware IP matching ─────────────────────────────────────
+
+/// Check whether `source_ip` matches any entry in the allowlist.
+///
+/// Entries may be:
+/// - Exact IPs: `"127.0.0.1"`, `"::1"`
+/// - CIDR ranges: `"10.0.0.0/8"`, `"172.16.0.0/12"`, `"fd00::/8"`
+pub fn ip_matches_allowlist(source_ip: &IpAddr, allowed: &[String]) -> bool {
+    allowed.iter().any(|entry| {
+        if let Some((net_str, prefix_str)) = entry.split_once('/') {
+            // CIDR notation
+            if let (Ok(network), Ok(prefix_len)) =
+                (net_str.parse::<IpAddr>(), prefix_str.parse::<u32>())
+            {
+                return ip_in_cidr(source_ip, &network, prefix_len);
+            }
+        }
+        // Exact IP match (parse to normalise representation).
+        entry
+            .parse::<IpAddr>()
+            .is_ok_and(|a| a == *source_ip)
+    })
+}
+
+/// Return `true` when `ip` falls within the `network/prefix_len` CIDR block.
+fn ip_in_cidr(ip: &IpAddr, network: &IpAddr, prefix_len: u32) -> bool {
+    match (ip, network) {
+        (IpAddr::V4(ip), IpAddr::V4(net)) => {
+            if prefix_len > 32 {
+                return false;
+            }
+            let mask = if prefix_len == 0 {
+                0u32
+            } else {
+                !0u32 << (32 - prefix_len)
+            };
+            (u32::from(*ip) & mask) == (u32::from(*net) & mask)
+        }
+        (IpAddr::V6(ip), IpAddr::V6(net)) => {
+            if prefix_len > 128 {
+                return false;
+            }
+            let mask = if prefix_len == 0 {
+                0u128
+            } else {
+                !0u128 << (128 - prefix_len)
+            };
+            (u128::from(*ip) & mask) == (u128::from(*net) & mask)
+        }
+        _ => false, // IPv4 vs IPv6 family mismatch
+    }
 }
 
 #[cfg(test)]
@@ -330,5 +429,116 @@ mod tests {
                 "path {p} should NOT be exempt"
             );
         }
+    }
+
+    // ── CIDR matching tests ──────────────────────────────────────
+
+    #[test]
+    fn cidr_exact_ipv4_match() {
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+        let allowed = vec!["192.168.1.1".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_exact_ipv6_match() {
+        let ip: IpAddr = "::1".parse().unwrap();
+        let allowed = vec!["::1".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_ipv4_slash24_match() {
+        let ip: IpAddr = "10.0.0.42".parse().unwrap();
+        let allowed = vec!["10.0.0.0/24".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_ipv4_slash16_match() {
+        let ip: IpAddr = "172.16.99.5".parse().unwrap();
+        let allowed = vec!["172.16.0.0/12".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_ipv4_slash8_match() {
+        let ip: IpAddr = "10.255.255.255".parse().unwrap();
+        let allowed = vec!["10.0.0.0/8".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_ipv4_miss() {
+        let ip: IpAddr = "192.168.2.1".parse().unwrap();
+        let allowed = vec!["192.168.1.0/24".to_string()];
+        assert!(!ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_ipv6_slash64_match() {
+        let ip: IpAddr = "fd00::1234:abcd".parse().unwrap();
+        let allowed = vec!["fd00::/64".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_ipv6_miss() {
+        let ip: IpAddr = "fd01::1".parse().unwrap();
+        let allowed = vec!["fd00::/16".to_string()];
+        assert!(!ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_family_mismatch_rejects() {
+        let ipv4: IpAddr = "10.0.0.1".parse().unwrap();
+        let allowed = vec!["::1/128".to_string()];
+        assert!(!ip_matches_allowlist(&ipv4, &allowed));
+    }
+
+    #[test]
+    fn cidr_invalid_entry_skipped_gracefully() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let allowed = vec![
+            "not-an-ip".to_string(),
+            "garbage/nope".to_string(),
+            "10.0.0.0/8".to_string(), // valid match
+        ];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_slash0_matches_everything() {
+        let ip: IpAddr = "200.1.2.3".parse().unwrap();
+        let allowed = vec!["0.0.0.0/0".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_slash32_exact_host() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let allowed = vec!["10.0.0.1/32".to_string()];
+        assert!(ip_matches_allowlist(&ip, &allowed));
+
+        let other: IpAddr = "10.0.0.2".parse().unwrap();
+        assert!(!ip_matches_allowlist(&other, &allowed));
+    }
+
+    #[test]
+    fn cidr_prefix_too_large_rejects() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let allowed = vec!["10.0.0.0/33".to_string()];
+        assert!(!ip_matches_allowlist(&ip, &allowed));
+    }
+
+    #[test]
+    fn cidr_multiple_ranges_any_match() {
+        let ip: IpAddr = "172.16.5.5".parse().unwrap();
+        let allowed = vec![
+            "10.0.0.0/8".to_string(),
+            "172.16.0.0/12".to_string(),
+            "192.168.0.0/16".to_string(),
+        ];
+        assert!(ip_matches_allowlist(&ip, &allowed));
     }
 }

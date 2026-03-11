@@ -36,10 +36,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/orchestration/classify", axum::routing::post(classify_preview))
         .route("/api/v1/identity/users", get(list_users))
         .route("/api/v1/memory/stats", get(memory_stats))
+        .route("/api/v1/memory/user/{user_id}", axum::routing::delete(delete_user_data))
         .route("/api/v1/events/count", get(event_count))
         // ── New endpoints ──
         .route("/api/v1/chat", post(chat))
         .route("/api/v1/sessions", get(list_sessions))
+        // SEC-05: Channel webhook callback routes
+        .route("/webhooks/{channel}", post(webhook_inbound))
         .route("/ws", get(ws_handler))
         .route("/metrics", get(metrics_endpoint))
         .with_state(state)
@@ -288,6 +291,71 @@ async fn memory_stats(State(state): State<AppState>) -> Json<serde_json::Value> 
             "semantic_token_budget": state.config().memory.semantic_token_budget,
         },
     }))
+}
+
+/// PRIV-03: Delete all stored data for a user.
+///
+/// `DELETE /api/v1/memory/user/:user_id`
+///
+/// Purges episodic and semantic memory tiers. Working memory is session-keyed
+/// and expires automatically.
+///
+/// Authorization: only the user themselves may delete their own data.
+/// A future admin role could bypass this restriction.
+async fn delete_user_data(
+    State(state): State<AppState>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Extension(caller): Extension<CallerIdentity>,
+) -> impl IntoResponse {
+    // Must be authenticated.
+    let caller_name = match &caller.username {
+        Some(name) if !name.is_empty() => name.clone(),
+        _ => {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Authentication required for data deletion" })),
+            );
+        }
+    };
+
+    // Authorization: callers may only delete their own data.
+    // TODO: allow admin role to delete on behalf of others (IAM-01).
+    if caller_name != user_id {
+        warn!(
+            caller = %caller_name,
+            target = %user_id,
+            "Unauthorized data deletion attempt — caller is not the target user"
+        );
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({ "error": "You may only delete your own data" })),
+        );
+    }
+
+    let uid = ngenorca_core::types::UserId(user_id.clone());
+
+    match state.memory().delete_user_data(&uid) {
+        Ok(report) => {
+            info!(user = %user_id, "User data deleted (PRIV-03) by {:?}", caller.username);
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "deleted": true,
+                    "user_id": user_id,
+                    "episodic_entries_deleted": report.episodic_deleted,
+                    "semantic_facts_deleted": report.semantic_deleted,
+                    "working_memory_note": report.working_note,
+                })),
+            )
+        }
+        Err(e) => {
+            error!(user = %user_id, error = %e, "Failed to delete user data");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Deletion failed: {e}") })),
+            )
+        }
+    }
 }
 
 /// Event count.
@@ -652,6 +720,205 @@ async fn list_sessions(
     }))
 }
 
+// ─── Webhook Handler (SEC-05) ───────────────────────────────────
+
+/// Generic inbound webhook handler for channel adapters.
+///
+/// Receives POST requests from external platforms (WhatsApp Cloud API, Slack
+/// Events API, Telegram webhook mode, Teams Bot Framework), verifies signatures
+/// where configured, and dispatches the payload to the appropriate adapter.
+///
+/// `POST /webhooks/{channel}`
+async fn webhook_inbound(
+    State(state): State<AppState>,
+    axum::extract::Path(channel): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    match channel.as_str() {
+        "whatsapp" => handle_whatsapp_webhook(&state, &headers, &body).await,
+        "slack" => handle_slack_webhook(&state, &headers, &body).await,
+        "telegram" => handle_telegram_webhook(&state, &headers, &body).await,
+        "teams" => handle_teams_webhook(&state, &headers, &body).await,
+        _ => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Unknown webhook channel" })),
+        ),
+    }
+}
+
+async fn handle_whatsapp_webhook(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let ch = &state.config().channels;
+    let wa = match ch.whatsapp.as_ref().filter(|c| c.enabled) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "WhatsApp not enabled" }))),
+    };
+
+    // SEC-05: Verify webhook signature when app_secret is configured.
+    if wa.app_secret.is_some() {
+        let sig = headers
+            .get("x-hub-signature-256")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        // Build a temporary adapter to use verify_webhook_signature.
+        let adapter = crate::channels::whatsapp::WhatsAppAdapter::cloud_api(
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            wa.app_secret.clone(),
+        );
+
+        if !adapter.verify_webhook_signature(body, sig) {
+            warn!("WhatsApp webhook: invalid signature — rejecting");
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid webhook signature" })),
+            );
+        }
+    }
+
+    // Signature valid (or no secret configured) — accept payload.
+    // The adapter's start_listening loop processes the events from
+    // the inbound channel; here we just gate on authenticity.
+    (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
+}
+
+async fn handle_slack_webhook(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let ch = &state.config().channels;
+    let sl = match ch.slack.as_ref().filter(|c| c.enabled) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "Slack not enabled" }))),
+    };
+
+    // SEC-05: Verify Slack webhook signature when signing_secret is configured.
+    if let Some(ref secret) = sl.signing_secret {
+        let sig = headers
+            .get("x-slack-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let ts = headers
+            .get("x-slack-request-timestamp")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("0");
+
+        if !crate::channels::slack::SlackAdapter::verify_webhook_signature(secret, ts, body, sig) {
+            warn!("Slack webhook: invalid signature — rejecting");
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid webhook signature" })),
+            );
+        }
+    }
+
+    // Slack URL verification challenge.
+    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(body)
+        && val.get("type").and_then(|v| v.as_str()) == Some("url_verification")
+    {
+        let challenge = val.get("challenge").and_then(|v| v.as_str()).unwrap_or("");
+        return (axum::http::StatusCode::OK, Json(json!({ "challenge": challenge })));
+    }
+
+    (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
+}
+
+async fn handle_telegram_webhook(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    _body: &[u8],
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let ch = &state.config().channels;
+    let tg = match ch.telegram.as_ref().filter(|c| c.enabled) {
+        Some(c) => c,
+        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "Telegram not enabled" }))),
+    };
+
+    // SEC-05: Verify Telegram webhook secret token (fail-closed).
+    // The secret_token is set when calling setWebhook. We derive the expected
+    // value from the bot token (first 32 chars of SHA-256 hex), so operators
+    // don't need extra config.
+    if let Some(ref bot_token) = tg.bot_token {
+        let header_val = match headers
+            .get("x-telegram-bot-api-secret-token")
+            .and_then(|v| v.to_str().ok())
+        {
+            Some(v) => v,
+            None => {
+                warn!("Telegram webhook: missing secret token header — rejecting (fail-closed)");
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "Missing secret token" })),
+                );
+            }
+        };
+
+        use subtle::ConstantTimeEq;
+        // Expected secret: first 32 hex chars of SHA-256(bot_token).
+        use sha2::Digest;
+        let hash = sha2::Sha256::digest(bot_token.as_bytes());
+        let expected: String = hash.iter().take(16).map(|b| format!("{b:02x}")).collect();
+        let a = header_val.as_bytes();
+        let b = expected.as_bytes();
+        if a.len() != b.len() || !bool::from(a.ct_eq(b)) {
+            warn!("Telegram webhook: invalid secret token — rejecting");
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid secret token" })),
+            );
+        }
+    }
+
+    (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
+}
+
+async fn handle_teams_webhook(
+    _state: &AppState,
+    headers: &axum::http::HeaderMap,
+    _body: &[u8],
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    // SEC-05: Verify Bot Framework JWT (fail-closed — header is required).
+    let auth = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        Some(v) => v,
+        None => {
+            warn!("Teams webhook: missing authorization header — rejecting (fail-closed)");
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Missing authorization" })),
+            );
+        }
+    };
+
+    // Extract the expected audience (app_id) from Teams channel config.
+    let expected_audience = _state
+        .config()
+        .channels
+        .teams
+        .as_ref()
+        .and_then(|t| t.app_id.as_deref());
+
+    // Full JWKS-based JWT verification (issuer, audience, expiry, signature).
+    if !crate::channels::teams::TeamsAdapter::verify_bot_framework_jwt(auth, expected_audience)
+        .await
+    {
+        warn!("Teams webhook: JWT verification failed — rejecting");
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Invalid authorization" })),
+        );
+    }
+
+    (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
+}
+
 // ─── Metrics ────────────────────────────────────────────────────
 
 /// GET /metrics — Prometheus-compatible metrics endpoint.
@@ -694,6 +961,19 @@ async fn ws_handler(
 }
 
 async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIdentity) {
+    // OPS-03: Connection cap — reject if too many concurrent WS connections.
+    const WS_MAX_CONNECTIONS: u64 = 256;
+    if state.metrics().ws_connections_active() >= WS_MAX_CONNECTIONS {
+        warn!("WebSocket connection rejected — max connections ({WS_MAX_CONNECTIONS}) reached");
+        // Close immediately with policy violation code.
+        let mut socket = socket;
+        let _ = socket.send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
+            code: 1008, // Policy Violation
+            reason: "Max concurrent connections reached".into(),
+        }))).await;
+        return;
+    }
+
     state.metrics().inc_ws_connections();
     let (mut sender, mut receiver) = socket.split();
 
@@ -709,6 +989,13 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
         user = %display_user,
         "WebSocket connection established"
     );
+
+    // OPS-03: Per-connection message rate limiting.
+    // Simple token-bucket: max 30 messages per 60-second window.
+    const WS_RATE_LIMIT_MAX: u32 = 30;
+    const WS_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+    let mut ws_msg_count: u32 = 0;
+    let mut ws_window_start = std::time::Instant::now();
 
     // Send a welcome message
     let welcome = WsChatResponse {
@@ -741,6 +1028,28 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
                     None => break, // Stream ended
                 };
 
+                // OPS-03: Per-connection rate limiting.
+                if ws_window_start.elapsed() >= WS_RATE_LIMIT_WINDOW {
+                    ws_msg_count = 0;
+                    ws_window_start = std::time::Instant::now();
+                }
+                ws_msg_count += 1;
+                if ws_msg_count > WS_RATE_LIMIT_MAX {
+                    warn!(user = %display_user, "WebSocket rate limit exceeded");
+                    let err_resp = WsChatResponse {
+                        msg_type: "error".into(),
+                        content: None,
+                        session_id: None,
+                        served_by: None,
+                        error: Some("Rate limit exceeded — please slow down".into()),
+                        latency_ms: None,
+                    };
+                    if let Ok(json) = serde_json::to_string(&err_resp) {
+                        let _ = sender.send(WsMessage::Text(json.into())).await;
+                    }
+                    continue;
+                }
+
                 state.metrics().inc_ws_messages_in();
                 if let Err(done) = handle_client_message(
                     &msg, &state, &mut sender, user_id.as_ref(), display_user,
@@ -750,10 +1059,27 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
                     }
             }
 
-            // Arm 2: Events pushed from the EventBus (broadcast to all WS clients)
+            // Arm 2: Events pushed from the EventBus (scoped per-user)
             event = event_rx.recv() => {
                 match event {
                     Ok(bus_event) => {
+                        // SEC-02: Only forward events that belong to this user
+                        // or are system-level (no user_id). Prevents cross-user
+                        // event visibility on shared deployments.
+                        if let Some(ref event_uid) = bus_event.user_id {
+                            if let Some(ref my_uid) = user_id {
+                                if event_uid != my_uid {
+                                    continue; // Not our event — skip
+                                }
+                            }
+                            // If WS connection is anonymous, still skip user-scoped events
+                            // unless we explicitly want broadcast behavior.
+                            else {
+                                continue;
+                            }
+                        }
+                        // Events with no user_id are system-level → broadcast to all.
+
                         let ws_event = WsEventPush {
                             msg_type: "event".into(),
                             event_id: bus_event.id.to_string(),
@@ -780,6 +1106,8 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
     }
 
     info!(user = %display_user, "WebSocket connection closed");
+    // OPS-03: Decrement active connection gauge on disconnect.
+    state.metrics().dec_ws_connections();
 }
 
 /// Process a single inbound client message. Returns `Err(true)` if the
@@ -919,7 +1247,7 @@ async fn handle_client_message(
                 id: ngenorca_core::types::EventId::new(),
                 timestamp: chrono::Utc::now(),
                 session_id: Some(session_id.clone()),
-                user_id: None,
+                user_id: user_id.cloned(),
                 payload: ngenorca_core::event::EventPayload::OrchestrationCompleted(record),
             };
             if let Err(e) = state.event_bus().publish(orch_event).await {

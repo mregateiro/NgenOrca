@@ -9,7 +9,7 @@ use ngenorca_core::{Error, Result};
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Run the gateway server.
 pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
@@ -78,6 +78,12 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
         .map_err(|e| Error::Gateway(format!("Failed to bind to {addr}: {e}")))?;
 
     info!("NgenOrca gateway listening on {}", addr);
+
+    // Emit startup security warnings for the active configuration.
+    for w in startup_security_warnings(&auth_mode, bind) {
+        warn!("{}", w);
+    }
+
     info!("  Auth:      {}", auth_mode);
     info!("  RateLimit: {}", rate_limit_info);
     info!("  CORS:      {}", cors_info);
@@ -97,6 +103,40 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
 
     info!("Server stopped");
     Ok(())
+}
+
+// ─── Startup security validation ─────────────────────────────────────
+
+/// Return warning messages for the current configuration.
+///
+/// Called at startup so operators see actionable security guidance in the log.
+/// SEC-04: unauthenticated bind, SEC-06: monitoring-path exposure.
+pub(crate) fn startup_security_warnings(auth_mode: &str, bind: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let is_loopback =
+        bind == "127.0.0.1" || bind == "::1" || bind == "localhost";
+
+    // SEC-04: auth_mode=None on a non-loopback address.
+    if auth_mode == "None" && !is_loopback {
+        warnings.push(format!(
+            "⚠ Security: auth_mode is None and bind address is '{}' — \
+             the gateway is accessible without authentication. \
+             Use TrustedProxy or Token mode for non-loopback deployments.",
+            bind
+        ));
+    }
+
+    // SEC-06: /health and /metrics are unauthenticated by design.
+    if !is_loopback {
+        warnings.push(format!(
+            "⚠ Security: /health and /metrics are unauthenticated and the bind address is '{}'. \
+             In enterprise deployments restrict these paths to a trusted monitoring network \
+             (e.g. separate listener, firewall rules, or reverse-proxy path restrictions).",
+            bind
+        ));
+    }
+
+    warnings
 }
 
 /// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
@@ -121,5 +161,42 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => { info!("Received Ctrl+C, shutting down gracefully…"); },
         () = terminate => { info!("Received SIGTERM, shutting down gracefully…"); },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_warnings_on_loopback() {
+        assert!(startup_security_warnings("Password", "127.0.0.1").is_empty());
+        assert!(startup_security_warnings("Token", "::1").is_empty());
+        assert!(startup_security_warnings("TrustedProxy", "localhost").is_empty());
+        assert!(startup_security_warnings("None", "127.0.0.1").is_empty());
+    }
+
+    #[test]
+    fn sec04_auth_none_non_loopback_warns() {
+        let w = startup_security_warnings("None", "0.0.0.0");
+        assert!(w.iter().any(|m| m.contains("auth_mode is None")));
+    }
+
+    #[test]
+    fn sec04_no_auth_warning_when_auth_enabled() {
+        let w = startup_security_warnings("Password", "0.0.0.0");
+        assert!(!w.iter().any(|m| m.contains("auth_mode is None")));
+    }
+
+    #[test]
+    fn sec06_monitoring_exposure_warning_on_public_bind() {
+        let w = startup_security_warnings("Password", "0.0.0.0");
+        assert!(w.iter().any(|m| m.contains("/health and /metrics")));
+    }
+
+    #[test]
+    fn sec06_no_monitoring_warning_on_loopback() {
+        let w = startup_security_warnings("Password", "127.0.0.1");
+        assert!(!w.iter().any(|m| m.contains("/health and /metrics")));
     }
 }
