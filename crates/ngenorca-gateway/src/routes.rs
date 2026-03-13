@@ -809,9 +809,22 @@ async fn handle_whatsapp_webhook(
         }
     }
 
-    // Signature valid (or no secret configured) — accept payload.
-    // The adapter's start_listening loop processes the events from
-    // the inbound channel; here we just gate on authenticity.
+    // Signature valid (or no secret configured) — parse payload and publish to EventBus.
+    let messages =
+        crate::channels::whatsapp::WhatsAppAdapter::parse_webhook_messages(body);
+    for ngen_msg in messages {
+        let event = ngenorca_core::event::Event {
+            id: ngenorca_core::types::EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(ngen_msg.session_id.clone()),
+            user_id: ngen_msg.user_id.clone(),
+            payload: ngenorca_core::event::EventPayload::Message(ngen_msg),
+        };
+        if let Err(e) = state.event_bus().publish(event).await {
+            warn!(error = %e, "WhatsApp webhook: failed to publish event");
+        }
+    }
+
     (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
@@ -862,13 +875,28 @@ async fn handle_slack_webhook(
         );
     }
 
+    // Parse event_callback payload and publish messages to EventBus.
+    let messages = crate::channels::slack::SlackAdapter::parse_webhook_messages(body);
+    for ngen_msg in messages {
+        let event = ngenorca_core::event::Event {
+            id: ngenorca_core::types::EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(ngen_msg.session_id.clone()),
+            user_id: ngen_msg.user_id.clone(),
+            payload: ngenorca_core::event::EventPayload::Message(ngen_msg),
+        };
+        if let Err(e) = state.event_bus().publish(event).await {
+            warn!(error = %e, "Slack webhook: failed to publish event");
+        }
+    }
+
     (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
 async fn handle_telegram_webhook(
     state: &AppState,
     headers: &axum::http::HeaderMap,
-    _body: &[u8],
+    body: &[u8],
 ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
     let ch = &state.config().channels;
     let tg = match ch.telegram.as_ref().filter(|c| c.enabled) {
@@ -916,13 +944,29 @@ async fn handle_telegram_webhook(
         }
     }
 
+    // Parse update and publish message to EventBus.
+    let messages =
+        crate::channels::telegram::TelegramAdapter::parse_webhook_messages(body);
+    for ngen_msg in messages {
+        let event = ngenorca_core::event::Event {
+            id: ngenorca_core::types::EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(ngen_msg.session_id.clone()),
+            user_id: ngen_msg.user_id.clone(),
+            payload: ngenorca_core::event::EventPayload::Message(ngen_msg),
+        };
+        if let Err(e) = state.event_bus().publish(event).await {
+            warn!(error = %e, "Telegram webhook: failed to publish event");
+        }
+    }
+
     (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
 async fn handle_teams_webhook(
-    _state: &AppState,
+    state: &AppState,
     headers: &axum::http::HeaderMap,
-    _body: &[u8],
+    body: &[u8],
 ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
     // SEC-05: Verify Bot Framework JWT (fail-closed — header is required).
     let auth = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
@@ -937,7 +981,7 @@ async fn handle_teams_webhook(
     };
 
     // Extract the expected audience (app_id) from Teams channel config.
-    let expected_audience = _state
+    let expected_audience = state
         .config()
         .channels
         .teams
@@ -953,6 +997,22 @@ async fn handle_teams_webhook(
             axum::http::StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Invalid authorization" })),
         );
+    }
+
+    // Parse activity and publish message to EventBus.
+    let messages =
+        crate::channels::teams::TeamsAdapter::parse_webhook_messages(body);
+    for ngen_msg in messages {
+        let event = ngenorca_core::event::Event {
+            id: ngenorca_core::types::EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(ngen_msg.session_id.clone()),
+            user_id: ngen_msg.user_id.clone(),
+            payload: ngenorca_core::event::EventPayload::Message(ngen_msg),
+        };
+        if let Err(e) = state.event_bus().publish(event).await {
+            warn!(error = %e, "Teams webhook: failed to publish event");
+        }
     }
 
     (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))

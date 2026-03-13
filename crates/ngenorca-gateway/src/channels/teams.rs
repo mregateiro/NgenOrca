@@ -220,7 +220,7 @@ impl TeamsAdapter {
     }
 
     /// Convert a Bot Framework Activity into an NgenOrca `Message`.
-    fn activity_to_message(activity: &BotFrameworkActivity) -> Option<Message> {
+    pub(crate) fn activity_to_message(activity: &BotFrameworkActivity) -> Option<Message> {
         if activity.activity_type.as_deref() != Some("message") {
             return None;
         }
@@ -279,6 +279,22 @@ impl TeamsAdapter {
     /// Webhook URL getter.
     pub fn webhook_url(&self) -> Option<&str> {
         self.webhook_url.as_deref()
+    }
+
+    /// Parse a raw Bot Framework webhook body into NgenOrca Messages.
+    ///
+    /// Expects a `BotFrameworkActivity` JSON. Returns a single-element vec if
+    /// the activity is a text message, empty otherwise.
+    pub(crate) fn parse_webhook_messages(body: &[u8]) -> Vec<Message> {
+        let activity: BotFrameworkActivity = match serde_json::from_slice(body) {
+            Ok(a) => a,
+            Err(_) => return Vec::new(),
+        };
+
+        match Self::activity_to_message(&activity) {
+            Some(msg) => vec![msg],
+            None => Vec::new(),
+        }
     }
 }
 

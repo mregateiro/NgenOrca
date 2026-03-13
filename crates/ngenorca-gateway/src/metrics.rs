@@ -45,6 +45,10 @@ struct MetricsInner {
     // ── Token usage ─────────────────────────────────────────────
     /// Cumulative token usage across all requests.
     tokens_total: AtomicU64,
+
+    // ── Channel adapter errors ──────────────────────────────────
+    /// Total channel adapter / inbound message processing failures.
+    channel_errors_total: AtomicU64,
 }
 
 impl Metrics {
@@ -63,6 +67,7 @@ impl Metrics {
                 rate_limited_total: AtomicU64::new(0),
                 consolidations_total: AtomicU64::new(0),
                 tokens_total: AtomicU64::new(0),
+                channel_errors_total: AtomicU64::new(0),
             }),
         }
     }
@@ -138,6 +143,12 @@ impl Metrics {
         self.inner.tokens_total.fetch_add(n, Ordering::Relaxed);
     }
 
+    pub fn inc_channel_errors(&self) {
+        self.inner
+            .channel_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     // ── Snapshot (for the /metrics endpoint) ────────────────────
 
     /// Render all metrics in Prometheus text exposition format.
@@ -210,6 +221,12 @@ impl Metrics {
             "ngenorca_tokens_total",
             "Cumulative token usage across all requests",
             i.tokens_total.load(Ordering::Relaxed),
+        );
+        prom_counter(
+            &mut buf,
+            "ngenorca_channel_errors_total",
+            "Total channel adapter / inbound message processing failures",
+            i.channel_errors_total.load(Ordering::Relaxed),
         );
 
         buf

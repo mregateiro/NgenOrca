@@ -138,7 +138,7 @@ impl SlackAdapter {
     }
 
     /// Convert a Slack message event into an NgenOrca Message.
-    fn slack_event_to_message(event: &SlackMessageEvent, channel_id: &str) -> Option<Message> {
+    pub(crate) fn slack_event_to_message(event: &SlackMessageEvent, channel_id: &str) -> Option<Message> {
         // Skip bot messages to avoid echoes.
         if event.bot_id.is_some() || event.subtype.is_some() {
             return None;
@@ -196,6 +196,43 @@ impl SlackAdapter {
         }
 
         Ok(())
+    }
+
+    /// Parse a raw Slack Events API webhook body into NgenOrca Messages.
+    ///
+    /// Expects a `{"type":"event_callback","event":{...}}` envelope with a
+    /// `message` event inside. Returns an empty vec on parse failure or if the
+    /// event is a bot message / subtype.
+    pub(crate) fn parse_webhook_messages(body: &[u8]) -> Vec<Message> {
+        let envelope: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+
+        // Only handle event_callback envelopes.
+        if envelope.get("type").and_then(|v| v.as_str()) != Some("event_callback") {
+            return Vec::new();
+        }
+
+        let event_val = match envelope.get("event") {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+
+        let event: SlackMessageEvent = match serde_json::from_value(event_val.clone()) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+
+        let channel_id = event_val
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        match Self::slack_event_to_message(&event, channel_id) {
+            Some(msg) => vec![msg],
+            None => Vec::new(),
+        }
     }
 }
 
@@ -443,17 +480,17 @@ impl ChannelAdapter for SlackAdapter {
 // ─── Slack API Deserialization Types ─────────────────────────────
 
 #[derive(Debug, Deserialize)]
-struct SlackMessageEvent {
+pub(crate) struct SlackMessageEvent {
     #[serde(default)]
-    user: Option<String>,
+    pub(crate) user: Option<String>,
     #[serde(default)]
-    text: Option<String>,
+    pub(crate) text: Option<String>,
     #[serde(default)]
-    ts: Option<String>,
+    pub(crate) ts: Option<String>,
     #[serde(default)]
-    bot_id: Option<String>,
+    pub(crate) bot_id: Option<String>,
     #[serde(default)]
-    subtype: Option<String>,
+    pub(crate) subtype: Option<String>,
 }
 
 // ─── Tests ──────────────────────────────────────────────────────

@@ -92,7 +92,7 @@ impl TelegramAdapter {
     }
 
     /// Convert a Telegram update into an NgenOrca Message.
-    fn telegram_message_to_ngenorca(update: &TelegramMessage) -> Option<Message> {
+    pub(crate) fn telegram_message_to_ngenorca(update: &TelegramMessage) -> Option<Message> {
         let user = update.from.as_ref()?;
         let text = update.text.as_deref().unwrap_or("");
         if text.is_empty() {
@@ -186,6 +186,27 @@ impl TelegramAdapter {
         }
 
         Ok(api_resp.result.unwrap_or_default())
+    }
+
+    /// Parse a raw Telegram webhook body into NgenOrca Messages.
+    ///
+    /// Expects a `TelegramUpdate` JSON. Returns a single-element vec if the
+    /// update contains a valid text message, empty otherwise.
+    pub(crate) fn parse_webhook_messages(body: &[u8]) -> Vec<Message> {
+        let update: TelegramUpdate = match serde_json::from_slice(body) {
+            Ok(u) => u,
+            Err(_) => return Vec::new(),
+        };
+
+        let tg_msg = match update.message {
+            Some(ref m) => m,
+            None => return Vec::new(),
+        };
+
+        match Self::telegram_message_to_ngenorca(tg_msg) {
+            Some(msg) => vec![msg],
+            None => Vec::new(),
+        }
     }
 }
 
@@ -423,39 +444,40 @@ struct TelegramApiResponse<T> {
 }
 
 #[derive(Debug, Deserialize)]
-struct TelegramUpdate {
-    update_id: i64,
-    message: Option<TelegramMessage>,
+pub(crate) struct TelegramUpdate {
+    #[allow(dead_code)]
+    pub(crate) update_id: i64,
+    pub(crate) message: Option<TelegramMessage>,
 }
 
 #[derive(Debug, Deserialize)]
-struct TelegramMessage {
-    message_id: i64,
-    from: Option<TelegramUser>,
-    chat: TelegramChat,
-    text: Option<String>,
+pub(crate) struct TelegramMessage {
+    pub(crate) message_id: i64,
+    pub(crate) from: Option<TelegramUser>,
+    pub(crate) chat: TelegramChat,
+    pub(crate) text: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
-    date: i64,
+    pub(crate) date: i64,
 }
 
 #[derive(Debug, Deserialize)]
-struct TelegramUser {
-    id: i64,
-    first_name: String,
+pub(crate) struct TelegramUser {
+    pub(crate) id: i64,
+    pub(crate) first_name: String,
     #[serde(default)]
-    username: Option<String>,
+    pub(crate) username: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
-    is_bot: bool,
+    pub(crate) is_bot: bool,
 }
 
 #[derive(Debug, Deserialize)]
-struct TelegramChat {
-    id: i64,
+pub(crate) struct TelegramChat {
+    pub(crate) id: i64,
     #[serde(rename = "type")]
     #[allow(dead_code)]
-    chat_type: String,
+    pub(crate) chat_type: String,
 }
 
 // ─── Tests ──────────────────────────────────────────────────────

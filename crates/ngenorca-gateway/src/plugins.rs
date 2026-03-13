@@ -177,6 +177,7 @@ impl PluginRegistry {
         info!(plugin = %name, "Channel adapter initialized");
 
         let adapter: Arc<dyn ChannelAdapter> = Arc::from(adapter);
+        let kind_key = adapter.channel_kind().to_string();
 
         let mut adapters_vec = self.channel_adapters.write().await;
         let mut idx_map = self.adapter_index.write().await;
@@ -187,8 +188,8 @@ impl PluginRegistry {
             adapter,
             healthy: true,
         });
-        idx_map.insert(id, index);
-        info!(plugin = %name, "Registered as channel adapter");
+        idx_map.insert(kind_key.clone(), index);
+        info!(plugin = %name, channel_kind = %kind_key, "Registered as channel adapter");
 
         Ok(())
     }

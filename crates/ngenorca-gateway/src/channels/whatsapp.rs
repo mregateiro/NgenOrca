@@ -279,6 +279,40 @@ impl WhatsAppAdapter {
         }
     }
 
+    /// Parse a raw Cloud API webhook body into NgenOrca Messages.
+    ///
+    /// Returns all successfully converted messages (empty vec on parse failure
+    /// or if the payload contains no text messages).
+    pub(crate) fn parse_webhook_messages(body: &[u8]) -> Vec<Message> {
+        let payload: WaWebhookPayload = match serde_json::from_slice(body) {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut out = Vec::new();
+        for entry in &payload.entry {
+            for change in &entry.changes {
+                if change.field != "messages" {
+                    continue;
+                }
+                let contact_name = change
+                    .value
+                    .contacts
+                    .as_ref()
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.profile.as_ref())
+                    .map(|p| p.name.as_str());
+
+                for msg in change.value.messages.as_deref().unwrap_or_default() {
+                    if let Some(m) = Self::webhook_message_to_ngenorca(msg, contact_name) {
+                        out.push(m);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Webhook path getter (Cloud API mode only).
     pub fn webhook_path(&self) -> &str {
         match &self.mode {
