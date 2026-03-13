@@ -81,11 +81,23 @@ pub enum EventPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IdentityChangeKind {
-    DevicePaired { device_id: crate::DeviceId },
-    DeviceRevoked { device_id: crate::DeviceId },
-    ChannelLinked { channel: String, handle: String },
-    ChannelUnlinked { channel: String },
-    TrustElevated { from: crate::TrustLevel, to: crate::TrustLevel },
+    DevicePaired {
+        device_id: crate::DeviceId,
+    },
+    DeviceRevoked {
+        device_id: crate::DeviceId,
+    },
+    ChannelLinked {
+        channel: String,
+        handle: String,
+    },
+    ChannelUnlinked {
+        channel: String,
+    },
+    TrustElevated {
+        from: crate::TrustLevel,
+        to: crate::TrustLevel,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,9 +119,17 @@ pub enum MemoryOperation {
 pub enum LifecycleEvent {
     GatewayStarted,
     GatewayShutdown,
-    PluginCrashed { plugin_id: crate::PluginId, reason: String },
-    AdapterConnected { channel: String },
-    AdapterDisconnected { channel: String, reason: String },
+    PluginCrashed {
+        plugin_id: crate::PluginId,
+        reason: String,
+    },
+    AdapterConnected {
+        channel: String,
+    },
+    AdapterDisconnected {
+        channel: String,
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -186,7 +206,11 @@ mod tests {
 
     #[test]
     fn memory_tier_serde_roundtrip() {
-        let tiers = vec![MemoryTier::Working, MemoryTier::Episodic, MemoryTier::Semantic];
+        let tiers = vec![
+            MemoryTier::Working,
+            MemoryTier::Episodic,
+            MemoryTier::Semantic,
+        ];
         for t in &tiers {
             let json = serde_json::to_string(t).unwrap();
             let back: MemoryTier = serde_json::from_str(&json).unwrap();
@@ -257,7 +281,10 @@ mod tests {
                 language: Some("en".into()),
             },
             routing: RoutingDecision {
-                target: SubAgentId { name: "local".into(), model: "phi-3".into() },
+                target: SubAgentId {
+                    name: "local".into(),
+                    model: "phi-3".into(),
+                },
                 reason: "rules".into(),
                 system_prompt: String::new(),
                 max_tokens: None,

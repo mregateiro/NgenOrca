@@ -53,8 +53,7 @@ pub enum SessionState {
 }
 
 /// Agent thinking intensity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThinkingLevel {
     Off,
     Minimal,
@@ -64,7 +63,6 @@ pub enum ThinkingLevel {
     High,
     Max,
 }
-
 
 #[cfg(test)]
 mod tests {

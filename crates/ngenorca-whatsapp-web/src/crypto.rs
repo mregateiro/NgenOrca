@@ -40,8 +40,7 @@ pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], length: usize) -> crate
 
 /// HMAC-SHA256.
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC can take key of any size");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC can take key of any size");
     mac.update(data);
     mac.finalize().into_bytes().to_vec()
 }
@@ -90,7 +89,7 @@ pub fn aes256_gcm_decrypt(
 
 /// AES-256-CBC encrypt (used by Signal Protocol for message encryption).
 pub fn aes256_cbc_encrypt(key: &[u8; 32], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
-    use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
     type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 
     let encryptor = Aes256CbcEnc::new(key.into(), iv.into());
@@ -103,7 +102,7 @@ pub fn aes256_cbc_decrypt(
     iv: &[u8; 16],
     ciphertext: &[u8],
 ) -> crate::Result<Vec<u8>> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
     let decryptor = Aes256CbcDec::new(key.into(), iv.into());

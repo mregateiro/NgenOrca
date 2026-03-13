@@ -9,12 +9,12 @@
 //! updates them incrementally from `OrchestrationRecord` events.
 
 use chrono::Utc;
+use ngenorca_core::Error;
+use ngenorca_core::Result;
 use ngenorca_core::orchestration::{
     LearnedRoutingRule, OrchestrationRecord, QualityVerdict, TaskComplexity, TaskIntent,
 };
-use ngenorca_core::Result;
-use ngenorca_core::Error;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Mutex;
 use tracing::debug;
 
@@ -26,8 +26,7 @@ pub struct LearnedRouter {
 impl LearnedRouter {
     /// Create a new learned router backed by a SQLite database.
     pub fn new(db_path: &str) -> Result<Self> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| Error::Database(e.to_string()))?;
+        let conn = Connection::open(db_path).map_err(|e| Error::Database(e.to_string()))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS learned_routes (
@@ -42,9 +41,12 @@ impl LearnedRouter {
                 UNIQUE(intent, domain, target_agent)
             );
             CREATE INDEX IF NOT EXISTS idx_routes_intent ON learned_routes(intent);",
-        ).map_err(|e| Error::Database(e.to_string()))?;
+        )
+        .map_err(|e| Error::Database(e.to_string()))?;
 
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Look up the best learned routing rule for a given intent and optional domains.
@@ -55,9 +57,11 @@ impl LearnedRouter {
         intent: &TaskIntent,
         domain_tags: &[String],
     ) -> Result<Option<LearnedRoutingRule>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
-        let intent_str = serde_json::to_string(intent)
-            .unwrap_or_else(|_| "\"Unknown\"".into());
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let intent_str = serde_json::to_string(intent).unwrap_or_else(|_| "\"Unknown\"".into());
 
         // First try domain-specific match
         if !domain_tags.is_empty() {
@@ -103,12 +107,20 @@ impl LearnedRouter {
         let target = &record.routing.target.name;
 
         // Determine primary domain (first domain tag, if any)
-        let domain: Option<&str> = record.classification.domain_tags.first().map(|s| s.as_str());
+        let domain: Option<&str> = record
+            .classification
+            .domain_tags
+            .first()
+            .map(|s| s.as_str());
 
-        let accepted = matches!(record.quality, QualityVerdict::Accept { score: Some(s) } if s >= 0.6);
+        let accepted =
+            matches!(record.quality, QualityVerdict::Accept { score: Some(s) } if s >= 0.6);
         let escalated = record.escalated;
 
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Check if rule already exists
         let existing: Option<(i64, f64, u32)> = conn
@@ -123,15 +135,22 @@ impl LearnedRouter {
         if let Some((id, old_conf, old_count)) = existing {
             // Update existing rule with exponential moving average
             let new_count = old_count + 1;
-            let alpha = 0.1_f64;  // Learning rate
-            let signal = if accepted && !escalated { 1.0 } else if escalated { 0.2 } else { 0.5 };
+            let alpha = 0.1_f64; // Learning rate
+            let signal = if accepted && !escalated {
+                1.0
+            } else if escalated {
+                0.2
+            } else {
+                0.5
+            };
             let new_conf = (1.0 - alpha) * old_conf + alpha * signal;
 
             conn.execute(
                 "UPDATE learned_routes SET confidence = ?1, sample_count = ?2, last_updated = ?3
                  WHERE id = ?4",
                 params![new_conf, new_count, Utc::now().to_rfc3339(), id],
-            ).map_err(|e| Error::Database(e.to_string()))?;
+            )
+            .map_err(|e| Error::Database(e.to_string()))?;
 
             debug!(
                 intent = %intent_str,
@@ -142,8 +161,7 @@ impl LearnedRouter {
             );
         } else if accepted {
             // Create new rule only on successful outcomes
-            let max_complexity = serde_json::to_string(&record.classification.complexity)
-                .ok();
+            let max_complexity = serde_json::to_string(&record.classification.complexity).ok();
 
             conn.execute(
                 "INSERT OR IGNORE INTO learned_routes (intent, domain, max_complexity, target_agent, confidence, sample_count, last_updated)
@@ -171,7 +189,10 @@ impl LearnedRouter {
 
     /// Return all learned rules (for diagnostics / API).
     pub fn all_rules(&self) -> Result<Vec<LearnedRoutingRule>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT intent, domain, max_complexity, target_agent, confidence, sample_count, last_updated
              FROM learned_routes ORDER BY confidence DESC",
@@ -188,7 +209,10 @@ impl LearnedRouter {
 
     /// Count total learned rules.
     pub fn count(&self) -> Result<u64> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM learned_routes", [], |row| row.get(0))
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -204,10 +228,9 @@ impl LearnedRouter {
         let sample_count: u32 = row.get(5)?;
         let updated_str: String = row.get(6)?;
 
-        let intent: TaskIntent = serde_json::from_str(&intent_json)
-            .unwrap_or(TaskIntent::Unknown);
-        let max_complexity: Option<TaskComplexity> = complexity_json
-            .and_then(|s| serde_json::from_str(&s).ok());
+        let intent: TaskIntent = serde_json::from_str(&intent_json).unwrap_or(TaskIntent::Unknown);
+        let max_complexity: Option<TaskComplexity> =
+            complexity_json.and_then(|s| serde_json::from_str(&s).ok());
         let last_updated = chrono::DateTime::parse_from_rfc3339(&updated_str)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
@@ -303,8 +326,15 @@ mod tests {
             );
             router.ingest(&record).unwrap();
         }
-        let rule = router.lookup(&TaskIntent::Summarization, &[]).unwrap().unwrap();
-        assert!(rule.confidence > 0.6, "Confidence should increase: {}", rule.confidence);
+        let rule = router
+            .lookup(&TaskIntent::Summarization, &[])
+            .unwrap()
+            .unwrap();
+        assert!(
+            rule.confidence > 0.6,
+            "Confidence should increase: {}",
+            rule.confidence
+        );
         assert_eq!(rule.sample_count, 10);
     }
 
@@ -312,28 +342,45 @@ mod tests {
     fn escalation_decreases_confidence() {
         let router = make_router();
         // First create with a success
-        router.ingest(&make_record(
-            TaskIntent::Analysis,
-            "analyzer",
-            QualityVerdict::Accept { score: Some(0.8) },
-            false,
-        )).unwrap();
+        router
+            .ingest(&make_record(
+                TaskIntent::Analysis,
+                "analyzer",
+                QualityVerdict::Accept { score: Some(0.8) },
+                false,
+            ))
+            .unwrap();
 
-        let before = router.lookup(&TaskIntent::Analysis, &[]).unwrap().unwrap().confidence;
+        let before = router
+            .lookup(&TaskIntent::Analysis, &[])
+            .unwrap()
+            .unwrap()
+            .confidence;
 
         // Then ingest an escalation
-        router.ingest(&make_record(
-            TaskIntent::Analysis,
-            "analyzer",
-            QualityVerdict::Escalate {
-                reason: "poor quality".into(),
-                escalate_to: None,
-            },
-            true,
-        )).unwrap();
+        router
+            .ingest(&make_record(
+                TaskIntent::Analysis,
+                "analyzer",
+                QualityVerdict::Escalate {
+                    reason: "poor quality".into(),
+                    escalate_to: None,
+                },
+                true,
+            ))
+            .unwrap();
 
-        let after = router.lookup(&TaskIntent::Analysis, &[]).unwrap().unwrap().confidence;
-        assert!(after < before, "Confidence should decrease: {} -> {}", before, after);
+        let after = router
+            .lookup(&TaskIntent::Analysis, &[])
+            .unwrap()
+            .unwrap()
+            .confidence;
+        assert!(
+            after < before,
+            "Confidence should decrease: {} -> {}",
+            before,
+            after
+        );
     }
 
     #[test]
@@ -349,7 +396,10 @@ mod tests {
         router.ingest(&record).unwrap();
 
         // Lookup with matching domain
-        let rule = router.lookup(&TaskIntent::Coding, &["rust".into()]).unwrap().unwrap();
+        let rule = router
+            .lookup(&TaskIntent::Coding, &["rust".into()])
+            .unwrap()
+            .unwrap();
         assert_eq!(rule.target_agent, "rust-specialist");
 
         // Lookup without domain should not find it (different row)
@@ -360,8 +410,22 @@ mod tests {
     #[test]
     fn all_rules_returns_everything() {
         let router = make_router();
-        router.ingest(&make_record(TaskIntent::Coding, "coder", QualityVerdict::Accept { score: Some(0.8) }, false)).unwrap();
-        router.ingest(&make_record(TaskIntent::Creative, "writer", QualityVerdict::Accept { score: Some(0.7) }, false)).unwrap();
+        router
+            .ingest(&make_record(
+                TaskIntent::Coding,
+                "coder",
+                QualityVerdict::Accept { score: Some(0.8) },
+                false,
+            ))
+            .unwrap();
+        router
+            .ingest(&make_record(
+                TaskIntent::Creative,
+                "writer",
+                QualityVerdict::Accept { score: Some(0.7) },
+                false,
+            ))
+            .unwrap();
         let rules = router.all_rules().unwrap();
         assert_eq!(rules.len(), 2);
     }
@@ -370,12 +434,14 @@ mod tests {
     fn no_rule_created_on_low_quality() {
         let router = make_router();
         // Score below 0.6 threshold
-        router.ingest(&make_record(
-            TaskIntent::Coding,
-            "coder",
-            QualityVerdict::Accept { score: Some(0.4) },
-            false,
-        )).unwrap();
+        router
+            .ingest(&make_record(
+                TaskIntent::Coding,
+                "coder",
+                QualityVerdict::Accept { score: Some(0.4) },
+                false,
+            ))
+            .unwrap();
         assert_eq!(router.count().unwrap(), 0);
     }
 }

@@ -15,17 +15,17 @@
 //! - Otherwise → Native mode (pure Rust, zero external runtime deps)
 
 use async_trait::async_trait;
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use ngenorca_whatsapp_web::{WhatsAppClient, WhatsAppEvent};
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -235,10 +235,7 @@ impl WhatsAppAdapter {
 
     /// Process a Cloud API webhook notification payload.
     #[allow(dead_code)]
-    pub(crate) fn process_webhook_payload(
-        payload: &WaWebhookPayload,
-        sender: &flume_like::Sender,
-    ) {
+    pub(crate) fn process_webhook_payload(payload: &WaWebhookPayload, sender: &flume_like::Sender) {
         for entry in &payload.entry {
             for change in &entry.changes {
                 if change.field != "messages" {
@@ -301,7 +298,10 @@ impl WhatsAppAdapter {
     /// The signature arrives in the `X-Hub-Signature-256` header as `sha256=<hex>`.
     pub fn verify_webhook_signature(&self, body: &[u8], signature_header: &str) -> bool {
         let secret = match &self.mode {
-            WhatsAppMode::CloudApi { app_secret: Some(secret), .. } => secret,
+            WhatsAppMode::CloudApi {
+                app_secret: Some(secret),
+                ..
+            } => secret,
             _ => return false, // No secret configured or not Cloud API mode
         };
 
@@ -430,9 +430,7 @@ impl Plugin for WhatsAppAdapter {
                     .bearer_auth(access_token)
                     .send()
                     .await
-                    .map_err(|e| {
-                        ngenorca_core::Error::Other(format!("WhatsApp health: {e}"))
-                    })?;
+                    .map_err(|e| ngenorca_core::Error::Other(format!("WhatsApp health: {e}")))?;
 
                 if resp.status().is_success() {
                     Ok(())
@@ -467,12 +465,9 @@ impl ChannelAdapter for WhatsAppAdapter {
 
         match &self.mode {
             WhatsAppMode::Native { data_dir } => {
-                let sender = self
-                    .sender
-                    .clone()
-                    .ok_or_else(|| {
-                        ngenorca_core::Error::Other("WhatsApp: not initialized".into())
-                    })?;
+                let sender = self.sender.clone().ok_or_else(|| {
+                    ngenorca_core::Error::Other("WhatsApp: not initialized".into())
+                })?;
 
                 let running = self.running.clone();
                 let data = data_dir.clone();
@@ -528,13 +523,12 @@ impl ChannelAdapter for WhatsAppAdapter {
                                         timestamp,
                                         message_id,
                                     }) => {
-                                        let ngen_msg =
-                                            WhatsAppAdapter::native_event_to_ngenorca(
-                                                &from,
-                                                &text,
-                                                timestamp,
-                                                &message_id,
-                                            );
+                                        let ngen_msg = WhatsAppAdapter::native_event_to_ngenorca(
+                                            &from,
+                                            &text,
+                                            timestamp,
+                                            &message_id,
+                                        );
                                         let event = Event {
                                             id: EventId::new(),
                                             timestamp: chrono::Utc::now(),
@@ -556,10 +550,8 @@ impl ChannelAdapter for WhatsAppAdapter {
                                         );
                                         if running.load(Ordering::SeqCst) {
                                             info!("WhatsApp: reconnecting in 5 s …");
-                                            tokio::time::sleep(
-                                                std::time::Duration::from_secs(5),
-                                            )
-                                            .await;
+                                            tokio::time::sleep(std::time::Duration::from_secs(5))
+                                                .await;
                                             // Re-try connection.
                                             let mut guard = wa_client_handle.lock().await;
                                             if let Some(ref mut wa) = *guard
@@ -754,10 +746,7 @@ mod tests {
             1700000000,
             "msg123",
         );
-        assert_eq!(
-            ngen.user_id,
-            Some(UserId("whatsapp:5511999999999".into()))
-        );
+        assert_eq!(ngen.user_id, Some(UserId("whatsapp:5511999999999".into())));
         assert_eq!(ngen.channel_kind, ChannelKind::WhatsApp);
         assert_eq!(ngen.channel.0, "5511999999999");
         match &ngen.content {
@@ -777,8 +766,7 @@ mod tests {
                 body: "Hello from WhatsApp!".into(),
             }),
         };
-        let ngen =
-            WhatsAppAdapter::webhook_message_to_ngenorca(&msg, Some("Test User")).unwrap();
+        let ngen = WhatsAppAdapter::webhook_message_to_ngenorca(&msg, Some("Test User")).unwrap();
         assert_eq!(ngen.user_id, Some(UserId("whatsapp:15551234567".into())));
         assert_eq!(ngen.channel_kind, ChannelKind::WhatsApp);
         match &ngen.content {
@@ -838,4 +826,3 @@ mod tests {
         }
     }
 }
-

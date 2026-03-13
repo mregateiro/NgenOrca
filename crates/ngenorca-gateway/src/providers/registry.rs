@@ -76,63 +76,61 @@ impl ProviderRegistry {
 
         // ── Azure OpenAI ──
         if let Some(ref azure_cfg) = config.agent.providers.azure
-            && let (Some(endpoint), Some(api_key)) =
-                (&azure_cfg.endpoint, &azure_cfg.api_key)
-            {
-                // Azure uses a different URL pattern:
-                // {endpoint}/openai/deployments/{deployment}/chat/completions?api-version={version}
-                // We'll use the OpenAI-compat provider with the deployment URL
-                let base = if let Some(ref deployment) = azure_cfg.deployment {
-                    format!(
-                        "{}/openai/deployments/{}",
-                        endpoint.trim_end_matches('/'),
-                        deployment
-                    )
-                } else {
-                    format!("{}/openai", endpoint.trim_end_matches('/'))
-                };
+            && let (Some(endpoint), Some(api_key)) = (&azure_cfg.endpoint, &azure_cfg.api_key)
+        {
+            // Azure uses a different URL pattern:
+            // {endpoint}/openai/deployments/{deployment}/chat/completions?api-version={version}
+            // We'll use the OpenAI-compat provider with the deployment URL
+            let base = if let Some(ref deployment) = azure_cfg.deployment {
+                format!(
+                    "{}/openai/deployments/{}",
+                    endpoint.trim_end_matches('/'),
+                    deployment
+                )
+            } else {
+                format!("{}/openai", endpoint.trim_end_matches('/'))
+            };
 
-                let provider = Arc::new(OpenAICompatProvider::new(
-                    &base,
-                    Some(api_key.clone()),
-                    None,
-                    "azure",
-                ));
-                providers.insert("azure".into(), provider);
-                info!("Registered provider: azure");
-            }
+            let provider = Arc::new(OpenAICompatProvider::new(
+                &base,
+                Some(api_key.clone()),
+                None,
+                "azure",
+            ));
+            providers.insert("azure".into(), provider);
+            info!("Registered provider: azure");
+        }
 
         // ── Google Gemini ──
         if let Some(ref google_cfg) = config.agent.providers.google
-            && let Some(ref api_key) = google_cfg.api_key {
-                // Google has its own API, but can work with OpenAI-compat via
-                // generativelanguage.googleapis.com/v1beta/openai
-                let base = format!(
-                    "{}/openai",
-                    google_cfg.base_url.trim_end_matches('/')
-                );
-                let provider = Arc::new(OpenAICompatProvider::new(
-                    &base,
-                    Some(api_key.clone()),
-                    None,
-                    "google",
-                ));
-                providers.insert("google".into(), provider);
-                info!("Registered provider: google");
-            }
+            && let Some(ref api_key) = google_cfg.api_key
+        {
+            // Google has its own API, but can work with OpenAI-compat via
+            // generativelanguage.googleapis.com/v1beta/openai
+            let base = format!("{}/openai", google_cfg.base_url.trim_end_matches('/'));
+            let provider = Arc::new(OpenAICompatProvider::new(
+                &base,
+                Some(api_key.clone()),
+                None,
+                "google",
+            ));
+            providers.insert("google".into(), provider);
+            info!("Registered provider: google");
+        }
 
         // ── OpenRouter ──
         if let Some(ref or_cfg) = config.agent.providers.openrouter
-            && let Some(ref api_key) = or_cfg.api_key {
-                let provider = Arc::new(OpenAICompatProvider::new(
-                    &or_cfg.base_url,
-                    Some(api_key.clone()),
-                    None,
-                    "openrouter",
-                ));
-                providers.insert("openrouter".into(), provider);
-                info!("Registered provider: openrouter ({})", or_cfg.base_url);
-            }
+            && let Some(ref api_key) = or_cfg.api_key
+        {
+            let provider = Arc::new(OpenAICompatProvider::new(
+                &or_cfg.base_url,
+                Some(api_key.clone()),
+                None,
+                "openrouter",
+            ));
+            providers.insert("openrouter".into(), provider);
+            info!("Registered provider: openrouter ({})", or_cfg.base_url);
+        }
 
         // ── Custom ──
         if let Some(ref custom_cfg) = config.agent.providers.custom {
@@ -176,15 +174,12 @@ impl ProviderRegistry {
             .map(|(p, _)| p)
             .unwrap_or(&self.default_provider);
 
-        self.providers
-            .get(provider_name)
-            .cloned()
-            .ok_or_else(|| {
-                Error::Gateway(format!(
-                    "No provider registered for '{provider_name}' (model: {model}). Available: {:?}",
-                    self.providers.keys().collect::<Vec<_>>()
-                ))
-            })
+        self.providers.get(provider_name).cloned().ok_or_else(|| {
+            Error::Gateway(format!(
+                "No provider registered for '{provider_name}' (model: {model}). Available: {:?}",
+                self.providers.keys().collect::<Vec<_>>()
+            ))
+        })
     }
 
     /// Get the default provider.

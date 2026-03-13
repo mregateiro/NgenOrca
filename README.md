@@ -52,7 +52,7 @@ Talk to NgenOrca from anywhere — all channels resolve to one unified identity:
 ### Native (recommended)
 
 ```bash
-git clone https://github.com/ngenorca/ngenorca.git
+git clone https://github.com/mregateiro/NgenOrca.git
 cd ngenorca
 cargo build --release
 ./target/release/ngenorca gateway
@@ -61,9 +61,10 @@ cargo build --release
 ### Docker
 
 ```bash
-cp .env.example .env           # Fill in your API keys
 docker compose up -d
 ```
+
+Then open the built-in `/config` page at `http://localhost:18789/config`, save your persistent runtime config, and restart the container.
 
 See [docs/DOCKER.md](docs/DOCKER.md) for the full step-by-step guide (config, Ollama, auth, troubleshooting).
 Using Portainer? See [docs/PORTAINER.md](docs/PORTAINER.md) for the web-UI walkthrough.
@@ -71,10 +72,11 @@ Using Portainer? See [docs/PORTAINER.md](docs/PORTAINER.md) for the web-UI walkt
 ### NAS / Homelab (with Authelia + nginx)
 
 ```bash
-cp .env.example .env           # Fill in your API keys
 # Copy deploy/nginx/ngenorca.conf to your nginx config
 docker compose -f docker-compose.nas.yml up -d
 ```
+
+Then open the built-in `/config` page at `https://ngenorca.nas.local/config`, save your config, and restart the service.
 
 See [docs/NAS_DEPLOYMENT.md](docs/NAS_DEPLOYMENT.md) for the full guide.
 
@@ -182,6 +184,7 @@ Guides:
 | Endpoint | Description |
 |---|---|
 | `GET /health` | Health check (no auth) |
+| `GET /config` | Built-in browser editor for the persisted config file |
 | `GET /metrics` | Prometheus-compatible metrics |
 | `GET /api/v1/status` | System status + caller identity |
 | `GET /api/v1/whoami` | Show authenticated user (verify Authelia flow) |

@@ -12,7 +12,7 @@
 use crate::binary::WaNode;
 use crate::proto;
 use crate::signal::SignalKeys;
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -339,9 +339,7 @@ mod tests {
         let node = WaNode {
             tag: "ref".into(),
             attrs: std::collections::HashMap::new(),
-            content: crate::binary::WaNodeContent::Text(
-                "abc-ref-value".into(),
-            ),
+            content: crate::binary::WaNodeContent::Text("abc-ref-value".into()),
         };
         assert_eq!(extract_qr_ref(&node), Some("abc-ref-value".into()));
     }

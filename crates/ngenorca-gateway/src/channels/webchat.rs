@@ -6,10 +6,10 @@
 //! and can be managed through the same lifecycle as external adapters.
 
 use async_trait::async_trait;
-use ngenorca_core::message::Message;
-use ngenorca_core::plugin::{PluginKind, PluginManifest, Permission, API_VERSION};
-use ngenorca_core::types::PluginId;
 use ngenorca_core::ChannelKind;
+use ngenorca_core::message::Message;
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
+use ngenorca_core::types::PluginId;
 use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext};
 
 /// Built-in WebChat adapter.

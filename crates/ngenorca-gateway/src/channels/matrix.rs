@@ -15,15 +15,15 @@
 //! `PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}`
 
 use async_trait::async_trait;
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -264,17 +264,16 @@ impl ChannelAdapter for MatrixAdapter {
                 );
                 if let Ok(resp) = client.get(&url).bearer_auth(&access_token).send().await
                     && let Ok(body) = resp.json::<serde_json::Value>().await
-                        && let Some(token) = body["next_batch"].as_str() {
-                            *since.lock().await = Some(token.to_string());
-                            debug!(since = token, "Matrix initial sync complete");
-                        }
+                    && let Some(token) = body["next_batch"].as_str()
+                {
+                    *since.lock().await = Some(token.to_string());
+                    debug!(since = token, "Matrix initial sync complete");
+                }
             }
 
             while running.load(Ordering::SeqCst) {
                 let since_token = since.lock().await.clone();
-                let mut url = format!(
-                    "{base}/_matrix/client/v3/sync?timeout={SYNC_TIMEOUT_MS}"
-                );
+                let mut url = format!("{base}/_matrix/client/v3/sync?timeout={SYNC_TIMEOUT_MS}");
                 if let Some(ref token) = since_token {
                     url.push_str(&format!("&since={token}"));
                 }
@@ -488,4 +487,3 @@ mod tests {
         assert!(MatrixAdapter::matrix_event_to_message(&event, "!room:x").is_none());
     }
 }
-

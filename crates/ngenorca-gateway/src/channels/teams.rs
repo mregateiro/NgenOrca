@@ -15,15 +15,15 @@
 //! `client_id` and `client_secret`.
 
 use async_trait::async_trait;
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -115,7 +115,11 @@ impl TeamsAdapter {
         if parts.len() != 3 {
             return false;
         }
-        parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '='))
+        parts.iter().all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '=')
+        })
     }
 
     /// Obtain (or refresh) the Azure AD OAuth2 token.
@@ -123,15 +127,14 @@ impl TeamsAdapter {
         {
             let cache = self.token_cache.lock().await;
             if let Some(ref ct) = *cache
-                && ct.expires_at > std::time::Instant::now() {
-                    return Ok(ct.access_token.clone());
-                }
+                && ct.expires_at > std::time::Instant::now()
+            {
+                return Ok(ct.access_token.clone());
+            }
         }
 
         let tenant = self.tenant_id.as_deref().unwrap_or("botframework.com");
-        let url = format!(
-            "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-        );
+        let url = format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token");
 
         let params = [
             ("grant_type", "client_credentials"),
@@ -168,8 +171,8 @@ impl TeamsAdapter {
 
         let expires_in = body["expires_in"].as_u64().unwrap_or(3600);
         // Refresh 60 s before real expiry.
-        let expires_at =
-            std::time::Instant::now() + std::time::Duration::from_secs(expires_in.saturating_sub(60));
+        let expires_at = std::time::Instant::now()
+            + std::time::Duration::from_secs(expires_in.saturating_sub(60));
 
         let mut cache = self.token_cache.lock().await;
         *cache = Some(CachedToken {
@@ -188,9 +191,7 @@ impl TeamsAdapter {
         text: &str,
     ) -> ngenorca_core::Result<()> {
         let token = self.get_token().await?;
-        let url = format!(
-            "{service_url}v3/conversations/{conversation_id}/activities"
-        );
+        let url = format!("{service_url}v3/conversations/{conversation_id}/activities");
 
         let activity = serde_json::json!({
             "type": "message",
@@ -260,10 +261,7 @@ impl TeamsAdapter {
     }
 
     /// Process an inbound Bot Framework Activity (called from the webhook route).
-    pub fn process_activity(
-        activity: &BotFrameworkActivity,
-        sender: &flume_like::Sender,
-    ) {
+    pub fn process_activity(activity: &BotFrameworkActivity, sender: &flume_like::Sender) {
         if let Some(ngen_msg) = TeamsAdapter::activity_to_message(activity) {
             let event = Event {
                 id: EventId::new(),
@@ -406,8 +404,7 @@ pub struct BotFrameworkConversation {
 // ─── JWKS cache & JWT verification helpers ──────────────────────
 
 /// Bot Framework OpenID metadata URL.
-const OPENID_CONFIG_URL: &str =
-    "https://login.botframework.com/v1/.well-known/openidconfiguration";
+const OPENID_CONFIG_URL: &str = "https://login.botframework.com/v1/.well-known/openidconfiguration";
 
 /// Expected issuer claim for Bot Framework tokens.
 const EXPECTED_ISSUER: &str = "https://api.botframework.com";
@@ -459,8 +456,7 @@ async fn verify_jwt_with_jwks(
         .find(|k| k.common.key_id.as_deref() == Some(kid))
         .ok_or_else(|| format!("No JWKS key matching kid={kid}"))?;
 
-    let key = jsonwebtoken::DecodingKey::from_jwk(jwk)
-        .map_err(|e| format!("Invalid JWK: {e}"))?;
+    let key = jsonwebtoken::DecodingKey::from_jwk(jwk).map_err(|e| format!("Invalid JWK: {e}"))?;
 
     let mut validation = jsonwebtoken::Validation::new(header.alg);
     validation.algorithms = allowed_algs.to_vec();
@@ -637,12 +633,16 @@ mod tests {
 
     #[test]
     fn legacy_verify_rejects_missing_bearer_prefix() {
-        assert!(!TeamsAdapter::verify_bot_framework_token("NotBearer abc.def.ghi"));
+        assert!(!TeamsAdapter::verify_bot_framework_token(
+            "NotBearer abc.def.ghi"
+        ));
     }
 
     #[test]
     fn legacy_verify_rejects_malformed_jwt() {
-        assert!(!TeamsAdapter::verify_bot_framework_token("Bearer only-one-part"));
+        assert!(!TeamsAdapter::verify_bot_framework_token(
+            "Bearer only-one-part"
+        ));
     }
 
     #[test]
@@ -667,7 +667,9 @@ mod tests {
         // In test environment, JWKS endpoint is unreachable → fail-closed.
         // Craft a structurally valid RS256 JWT (header with kid) but unsigned.
         let header = base64_url_encode(r#"{"alg":"RS256","typ":"JWT","kid":"test-key-1"}"#);
-        let payload = base64_url_encode(r#"{"iss":"https://api.botframework.com","aud":"app-id-123","exp":9999999999}"#);
+        let payload = base64_url_encode(
+            r#"{"iss":"https://api.botframework.com","aud":"app-id-123","exp":9999999999}"#,
+        );
         let token = format!("Bearer {header}.{payload}.fake-signature");
         // Should reject because JWKS fetch fails (no network in test).
         assert!(!TeamsAdapter::verify_bot_framework_jwt(&token, Some("app-id-123")).await);

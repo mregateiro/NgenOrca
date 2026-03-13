@@ -16,15 +16,15 @@
 //!   socket (same child read/write pattern, just over TCP/Unix socket)
 
 use async_trait::async_trait;
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -210,9 +210,7 @@ impl Plugin for SignalAdapter {
             .arg("--version")
             .output()
             .await
-            .map_err(|e| {
-                ngenorca_core::Error::Other(format!("signal-cli health check: {e}"))
-            })?;
+            .map_err(|e| ngenorca_core::Error::Other(format!("signal-cli health check: {e}")))?;
 
         if output.status.success() {
             Ok(())
@@ -253,14 +251,7 @@ impl ChannelAdapter for SignalAdapter {
                 info!("Signal: spawning signal-cli daemon …");
 
                 let child = Command::new(&cli_path)
-                    .args([
-                        "--config",
-                        &data_path,
-                        "-u",
-                        &phone,
-                        "daemon",
-                        "--json",
-                    ])
+                    .args(["--config", &data_path, "-u", &phone, "daemon", "--json"])
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
@@ -297,25 +288,23 @@ impl ChannelAdapter for SignalAdapter {
                                                         SignalAdapter::envelope_to_message(
                                                             envelope, &phone,
                                                         )
-                                                    {
-                                                        let event = Event {
-                                                            id: EventId::new(),
-                                                            timestamp: chrono::Utc::now(),
-                                                            session_id: Some(
-                                                                ngen_msg.session_id.clone(),
-                                                            ),
-                                                            user_id: ngen_msg.user_id.clone(),
-                                                            payload: EventPayload::Message(
-                                                                ngen_msg,
-                                                            ),
-                                                        };
-                                                        if let Err(e) = sender.send(event) {
-                                                            error!(
-                                                                error = %e,
-                                                                "Signal: failed to send event"
-                                                            );
-                                                        }
+                                                {
+                                                    let event = Event {
+                                                        id: EventId::new(),
+                                                        timestamp: chrono::Utc::now(),
+                                                        session_id: Some(
+                                                            ngen_msg.session_id.clone(),
+                                                        ),
+                                                        user_id: ngen_msg.user_id.clone(),
+                                                        payload: EventPayload::Message(ngen_msg),
+                                                    };
+                                                    if let Err(e) = sender.send(event) {
+                                                        error!(
+                                                            error = %e,
+                                                            "Signal: failed to send event"
+                                                        );
                                                     }
+                                                }
                                             }
                                             Err(e) => {
                                                 debug!(

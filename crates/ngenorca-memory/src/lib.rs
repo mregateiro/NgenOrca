@@ -18,8 +18,8 @@ pub mod episodic;
 pub mod semantic;
 pub mod working;
 
-use ngenorca_core::types::UserId;
 use ngenorca_core::Result;
+use ngenorca_core::types::UserId;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -63,17 +63,25 @@ impl MemoryManager {
         let semantic_facts = self.semantic.retrieve_for_user(user_id, token_budget / 4)?;
 
         // Tier 2: Episodic memory — relevant past conversations.
-        let episodic_results =
-            self.episodic
-                .search(user_id, current_query, 5, token_budget / 4)?;
+        let episodic_results = self
+            .episodic
+            .search(user_id, current_query, 5, token_budget / 4)?;
 
         // Tier 1: Working memory — current session context.
         let working_messages = self.working.get_session(session_id);
 
         // Estimate total tokens (rough heuristic: ~4 chars per token).
         let semantic_tokens = semantic_facts.iter().map(|f| f.fact.len()).sum::<usize>() / 4;
-        let episodic_tokens = episodic_results.iter().map(|e| e.content.len()).sum::<usize>() / 4;
-        let working_tokens = working_messages.iter().map(|m| m.content.len()).sum::<usize>() / 4;
+        let episodic_tokens = episodic_results
+            .iter()
+            .map(|e| e.content.len())
+            .sum::<usize>()
+            / 4;
+        let working_tokens = working_messages
+            .iter()
+            .map(|m| m.content.len())
+            .sum::<usize>()
+            / 4;
         let total_estimated_tokens = semantic_tokens + episodic_tokens + working_tokens;
 
         Ok(ContextPack {
@@ -150,12 +158,10 @@ impl MemoryManager {
         }
 
         // Prune excess episodic entries
-        let episodes_pruned = self.episodic.prune(user_id, max_episodes)
-            .unwrap_or(0);
+        let episodes_pruned = self.episodic.prune(user_id, max_episodes).unwrap_or(0);
 
         // Prune very old / low-confidence semantic facts
-        let facts_pruned = self.semantic.prune(user_id, 0.1, 180)
-            .unwrap_or(0);
+        let facts_pruned = self.semantic.prune(user_id, 0.1, 180).unwrap_or(0);
 
         let result = ConsolidationResult {
             entries_scanned: entries.len() as u32,
@@ -184,80 +190,113 @@ impl MemoryManager {
 
         // Preference patterns: "I prefer X", "I like X", "I don't like X"
         let pref_patterns = [
-            "i prefer ", "i like ", "i love ",
-            "i don't like ", "i dislike ", "i hate ",
-            "my favorite ", "my favourite ",
+            "i prefer ",
+            "i like ",
+            "i love ",
+            "i don't like ",
+            "i dislike ",
+            "i hate ",
+            "my favorite ",
+            "my favourite ",
         ];
         for pattern in pref_patterns {
             if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
-                let end = remainder.find(['.', ',', '!', '?', '\n'])
+                let end = remainder
+                    .find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
                 remainder[..end].trim().to_string()
-            })
-                && rest.len() >= 3 {
-                    facts.push((semantic::FactCategory::Preference, format!("User {pattern}{rest}")));
-                }
+            }) && rest.len() >= 3
+            {
+                facts.push((
+                    semantic::FactCategory::Preference,
+                    format!("User {pattern}{rest}"),
+                ));
+            }
         }
 
         // Technical preferences: "I use X", "I work with X", "I'm using X"
         let tech_patterns = [
-            "i use ", "i'm using ", "i work with ",
-            "my stack ", "i code in ", "i program in ",
+            "i use ",
+            "i'm using ",
+            "i work with ",
+            "my stack ",
+            "i code in ",
+            "i program in ",
         ];
         for pattern in tech_patterns {
             if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
-                let end = remainder.find(['.', ',', '!', '?', '\n'])
+                let end = remainder
+                    .find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
                 remainder[..end].trim().to_string()
-            })
-                && rest.len() >= 2 {
-                    facts.push((semantic::FactCategory::TechnicalPreference, format!("User {pattern}{rest}")));
-                }
+            }) && rest.len() >= 2
+            {
+                facts.push((
+                    semantic::FactCategory::TechnicalPreference,
+                    format!("User {pattern}{rest}"),
+                ));
+            }
         }
 
         // Personal info: "My name is X", "I am a X", "I live in X"
         let personal_patterns = [
-            "my name is ", "i am a ", "i'm a ",
-            "i live in ", "i'm from ", "i work at ",
-            "i work as ", "my job is ",
+            "my name is ",
+            "i am a ",
+            "i'm a ",
+            "i live in ",
+            "i'm from ",
+            "i work at ",
+            "i work as ",
+            "my job is ",
         ];
         for pattern in personal_patterns {
             if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
-                let end = remainder.find(['.', ',', '!', '?', '\n'])
+                let end = remainder
+                    .find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
                 remainder[..end].trim().to_string()
-            })
-                && rest.len() >= 2 {
-                    facts.push((semantic::FactCategory::PersonalInfo, format!("User {pattern}{rest}")));
-                }
+            }) && rest.len() >= 2
+            {
+                facts.push((
+                    semantic::FactCategory::PersonalInfo,
+                    format!("User {pattern}{rest}"),
+                ));
+            }
         }
 
         // Goals: "I want to X", "my goal is X", "I'm trying to X"
         let goal_patterns = [
-            "i want to ", "my goal is ", "i'm trying to ",
-            "i need to learn ", "i'm learning ",
+            "i want to ",
+            "my goal is ",
+            "i'm trying to ",
+            "i need to learn ",
+            "i'm learning ",
         ];
         for pattern in goal_patterns {
             if let Some(rest) = lower.find(pattern).map(|pos| {
                 let start = pos + pattern.len();
                 let remainder = &text[start..];
-                let end = remainder.find(['.', ',', '!', '?', '\n'])
+                let end = remainder
+                    .find(['.', ',', '!', '?', '\n'])
                     .unwrap_or(remainder.len())
                     .min(120);
                 remainder[..end].trim().to_string()
-            })
-                && rest.len() >= 3 {
-                    facts.push((semantic::FactCategory::Goal, format!("User {pattern}{rest}")));
-                }
+            }) && rest.len() >= 3
+            {
+                facts.push((
+                    semantic::FactCategory::Goal,
+                    format!("User {pattern}{rest}"),
+                ));
+            }
         }
 
         facts
@@ -359,13 +398,17 @@ mod tests {
     fn extract_technical_preference() {
         let facts = MemoryManager::extract_facts_from_text("I use Rust and Python daily.");
         assert!(!facts.is_empty());
-        assert!(matches!(facts[0].0, semantic::FactCategory::TechnicalPreference));
+        assert!(matches!(
+            facts[0].0,
+            semantic::FactCategory::TechnicalPreference
+        ));
         assert!(facts[0].1.contains("Rust and Python daily"));
     }
 
     #[test]
     fn extract_personal_info() {
-        let facts = MemoryManager::extract_facts_from_text("My name is Alice and I live in London.");
+        let facts =
+            MemoryManager::extract_facts_from_text("My name is Alice and I live in London.");
         assert!(facts.len() >= 2);
         let categories: Vec<_> = facts.iter().map(|(c, _)| c.clone()).collect();
         assert!(categories.contains(&semantic::FactCategory::PersonalInfo));
@@ -394,9 +437,7 @@ mod tests {
             let entry = episodic::EpisodicEntry {
                 id: 0,
                 user_id: "test_user".into(),
-                content: format!(
-                    "User: I prefer dark mode.\nAssistant: Noted! Entry {i}"
-                ),
+                content: format!("User: I prefer dark mode.\nAssistant: Noted! Entry {i}"),
                 summary: None,
                 channel: "cli".into(),
                 timestamp: chrono::Utc::now(),

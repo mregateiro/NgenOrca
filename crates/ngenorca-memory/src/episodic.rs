@@ -6,7 +6,7 @@
 use chrono::{DateTime, Utc};
 use ngenorca_core::types::UserId;
 use ngenorca_core::{Error, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -73,11 +73,15 @@ impl EpisodicMemory {
 
     /// Store a new episodic memory entry.
     pub fn store(&self, entry: &EpisodicEntry) -> Result<i64> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        let embedding_blob: Option<Vec<u8>> = entry.embedding.as_ref().map(|e| {
-            e.iter().flat_map(|f| f.to_le_bytes()).collect()
-        });
+        let embedding_blob: Option<Vec<u8>> = entry
+            .embedding
+            .as_ref()
+            .map(|e| e.iter().flat_map(|f| f.to_le_bytes()).collect());
 
         conn.execute(
             "INSERT INTO episodic_entries (user_id, content, summary, channel, timestamp, embedding)
@@ -116,7 +120,10 @@ impl EpisodicMemory {
         limit: usize,
         _token_budget: usize,
     ) -> Result<Vec<EpisodicEntry>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Tokenise query into lowercase terms (≥ 2 chars, deduplicated).
         let query_terms: Vec<String> = tokenize(query);
@@ -167,7 +174,10 @@ impl EpisodicMemory {
                 let content_lower = content.to_lowercase();
                 let summary_lower = summary.as_deref().unwrap_or("").to_lowercase();
                 let haystack = format!("{content_lower} {summary_lower}");
-                let matched = query_terms.iter().filter(|t| haystack.contains(t.as_str())).count();
+                let matched = query_terms
+                    .iter()
+                    .filter(|t| haystack.contains(t.as_str()))
+                    .count();
                 let term_score = matched as f64 / query_terms.len() as f64;
 
                 // Recency score: exponential decay with 7-day half-life.
@@ -199,7 +209,11 @@ impl EpisodicMemory {
             .collect();
 
         // Sort by relevance (descending).
-        scored.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored.truncate(limit);
         Ok(scored)
     }
@@ -211,7 +225,10 @@ impl EpisodicMemory {
         since: DateTime<Utc>,
         limit: usize,
     ) -> Result<Vec<EpisodicEntry>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn
             .prepare(
@@ -238,18 +255,20 @@ impl EpisodicMemory {
             )
             .map_err(|e| Error::Database(e.to_string()))?
             .filter_map(|r| r.ok())
-            .map(|(id, user_id, content, summary, channel, timestamp)| EpisodicEntry {
-                id,
-                user_id,
-                content,
-                summary,
-                channel,
-                timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
-                    .unwrap_or_default()
-                    .with_timezone(&Utc),
-                embedding: None,
-                relevance_score: 0.0,
-            })
+            .map(
+                |(id, user_id, content, summary, channel, timestamp)| EpisodicEntry {
+                    id,
+                    user_id,
+                    content,
+                    summary,
+                    channel,
+                    timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
+                        .unwrap_or_default()
+                        .with_timezone(&Utc),
+                    embedding: None,
+                    relevance_score: 0.0,
+                },
+            )
             .collect();
 
         Ok(entries)
@@ -257,7 +276,10 @@ impl EpisodicMemory {
 
     /// Count total entries for a user.
     pub fn count(&self, user_id: &UserId) -> Result<u64> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM episodic_entries WHERE user_id = ?1",
@@ -278,7 +300,10 @@ impl EpisodicMemory {
         }
 
         let to_remove = current - max_entries;
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let removed = conn
             .execute(
                 "DELETE FROM episodic_entries WHERE id IN (
@@ -296,7 +321,10 @@ impl EpisodicMemory {
 
     /// Return all distinct user IDs stored in episodic memory.
     pub fn distinct_users(&self) -> Result<Vec<String>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let mut stmt = conn
             .prepare("SELECT DISTINCT user_id FROM episodic_entries")
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -312,7 +340,10 @@ impl EpisodicMemory {
     ///
     /// Returns the number of rows deleted.
     pub fn delete_for_user(&self, user_id: &UserId) -> Result<usize> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let deleted = conn
             .execute(
                 "DELETE FROM episodic_entries WHERE user_id = ?1",
@@ -386,8 +417,10 @@ mod tests {
     fn search_finds_matching_content() {
         let em = mem();
         let uid = UserId("u1".into());
-        em.store(&make_entry("u1", "I love Rust programming", "cli")).unwrap();
-        em.store(&make_entry("u1", "Python is nice too", "web")).unwrap();
+        em.store(&make_entry("u1", "I love Rust programming", "cli"))
+            .unwrap();
+        em.store(&make_entry("u1", "Python is nice too", "web"))
+            .unwrap();
         let results = em.search(&uid, "Rust", 10, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("Rust"));
@@ -407,7 +440,8 @@ mod tests {
         let em = mem();
         let uid = UserId("u1".into());
         for i in 0..5 {
-            em.store(&make_entry("u1", &format!("entry {i} about Rust"), "cli")).unwrap();
+            em.store(&make_entry("u1", &format!("entry {i} about Rust"), "cli"))
+                .unwrap();
         }
         let results = em.search(&uid, "Rust", 3, 10000).unwrap();
         assert_eq!(results.len(), 3);
@@ -508,9 +542,12 @@ mod tests {
     fn search_scores_by_term_overlap() {
         let em = mem();
         let uid = UserId("u1".into());
-        em.store(&make_entry("u1", "I love Rust programming", "cli")).unwrap();
-        em.store(&make_entry("u1", "Rust is great for systems", "cli")).unwrap();
-        em.store(&make_entry("u1", "Python scripting", "cli")).unwrap();
+        em.store(&make_entry("u1", "I love Rust programming", "cli"))
+            .unwrap();
+        em.store(&make_entry("u1", "Rust is great for systems", "cli"))
+            .unwrap();
+        em.store(&make_entry("u1", "Python scripting", "cli"))
+            .unwrap();
 
         // "Rust programming" has 2 query terms; entry 1 matches both, entry 2 matches one
         let results = em.search(&uid, "Rust programming", 10, 10000).unwrap();

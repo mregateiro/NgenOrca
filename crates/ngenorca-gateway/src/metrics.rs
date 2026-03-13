@@ -4,8 +4,8 @@
 //! exposed as plain-text at `GET /metrics` in Prometheus exposition format.
 //! No external metrics crate is needed — we use atomics directly.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Shared metrics registry. Clone-friendly (wraps `Arc`).
 #[derive(Clone)]
@@ -70,7 +70,9 @@ impl Metrics {
     // ── Increment helpers ───────────────────────────────────────
 
     pub fn inc_http_requests(&self) {
-        self.inner.http_requests_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .http_requests_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_http_errors(&self) {
@@ -78,13 +80,19 @@ impl Metrics {
     }
 
     pub fn inc_ws_connections(&self) {
-        self.inner.ws_connections_total.fetch_add(1, Ordering::Relaxed);
-        self.inner.ws_connections_active.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .ws_connections_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .ws_connections_active
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Decrement the active WS connection gauge (called on disconnect).
     pub fn dec_ws_connections(&self) {
-        self.inner.ws_connections_active.fetch_sub(1, Ordering::Relaxed);
+        self.inner
+            .ws_connections_active
+            .fetch_sub(1, Ordering::Relaxed);
     }
 
     /// Current number of active WS connections.
@@ -93,11 +101,15 @@ impl Metrics {
     }
 
     pub fn inc_ws_messages_in(&self) {
-        self.inner.ws_messages_in_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .ws_messages_in_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_orchestrations(&self) {
-        self.inner.orchestrations_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .orchestrations_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_escalations(&self) {
@@ -105,15 +117,21 @@ impl Metrics {
     }
 
     pub fn inc_augmentations(&self) {
-        self.inner.augmentations_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .augmentations_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_rate_limited(&self) {
-        self.inner.rate_limited_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .rate_limited_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_consolidations(&self) {
-        self.inner.consolidations_total.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .consolidations_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn add_tokens(&self, n: u64) {

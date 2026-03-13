@@ -13,8 +13,8 @@ pub mod subscriber;
 
 use std::sync::Arc;
 
-use ngenorca_core::event::Event;
 use ngenorca_core::Result;
+use ngenorca_core::event::Event;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 

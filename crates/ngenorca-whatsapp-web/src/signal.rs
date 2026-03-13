@@ -219,11 +219,7 @@ impl Session {
         let ciphertext = crypto::aes256_cbc_encrypt(&enc_key, &iv, plaintext);
 
         // HMAC-SHA256 for authentication.
-        let mac_input = [
-            &self.remote_ratchet_public[..],
-            &ciphertext[..],
-        ]
-        .concat();
+        let mac_input = [&self.remote_ratchet_public[..], &ciphertext[..]].concat();
         let mac = crypto::hmac_sha256(&auth_key, &mac_input);
 
         let counter = self.send_counter;
@@ -288,8 +284,7 @@ impl Session {
         // Generate new ratchet key pair for sending.
         let (new_secret, _new_public) = crypto::generate_x25519_keypair();
         let dh2 = new_secret.diffie_hellman(&remote_pub);
-        let derived2 =
-            crypto::hkdf_sha256(&self.root_key, dh2.as_bytes(), b"WhisperRatchet", 64)?;
+        let derived2 = crypto::hkdf_sha256(&self.root_key, dh2.as_bytes(), b"WhisperRatchet", 64)?;
         self.root_key = derived2[..32].to_vec();
         self.send_chain_key = derived2[32..64].to_vec();
         self.ratchet_private = new_secret.to_bytes().to_vec();

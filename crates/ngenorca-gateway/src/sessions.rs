@@ -32,11 +32,7 @@ impl SessionManager {
 
     /// Get or create a session for a user+channel combination.
     /// If the user already has an active session on this channel, reuse it.
-    pub fn get_or_create(
-        &self,
-        user_id: Option<&UserId>,
-        channel: &str,
-    ) -> Result<SessionId> {
+    pub fn get_or_create(&self, user_id: Option<&UserId>, channel: &str) -> Result<SessionId> {
         let key = (
             user_id.map(|u| u.0.clone()).unwrap_or_default(),
             channel.to_string(),
@@ -56,11 +52,12 @@ impl SessionManager {
                     .map_err(|e| Error::Gateway(format!("Session lock: {e}")))?;
 
                 if let Some(session) = sessions.get(session_id)
-                    && (session.state == SessionState::Active || session.state == SessionState::Idle)
-                    {
-                        debug!(session_id = %session_id, "Reusing existing session");
-                        return Ok(session_id.clone());
-                    }
+                    && (session.state == SessionState::Active
+                        || session.state == SessionState::Idle)
+                {
+                    debug!(session_id = %session_id, "Reusing existing session");
+                    return Ok(session_id.clone());
+                }
             }
         }
 
@@ -108,11 +105,7 @@ impl SessionManager {
     }
 
     /// Update the session after a message was processed.
-    pub fn record_message(
-        &self,
-        session_id: &SessionId,
-        tokens_used: usize,
-    ) -> Result<()> {
+    pub fn record_message(&self, session_id: &SessionId, tokens_used: usize) -> Result<()> {
         let mut sessions = self
             .sessions
             .write()
@@ -155,20 +148,21 @@ impl SessionManager {
 
     /// Total number of sessions (including ended).
     pub fn total_sessions(&self) -> usize {
-        self.sessions
-            .read()
-            .map(|s| s.len())
-            .unwrap_or(0)
+        self.sessions.read().map(|s| s.len()).unwrap_or(0)
     }
 
     /// Remove sessions that have been idle or ended for longer than `ttl`.
     ///
     /// Returns the number of pruned sessions.
     pub fn prune_expired(&self, ttl: std::time::Duration) -> usize {
-        let cutoff = Utc::now() - chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1));
+        let cutoff =
+            Utc::now() - chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1));
 
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
-        let mut user_sessions = self.user_sessions.write().unwrap_or_else(|e| e.into_inner());
+        let mut user_sessions = self
+            .user_sessions
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
 
         let expired_ids: Vec<SessionId> = sessions
             .iter()
@@ -191,7 +185,11 @@ impl SessionManager {
         }
 
         if count > 0 {
-            info!(pruned = count, remaining = sessions.len(), "Pruned expired sessions");
+            info!(
+                pruned = count,
+                remaining = sessions.len(),
+                "Pruned expired sessions"
+            );
         }
 
         count
@@ -203,10 +201,7 @@ mod tests {
     use super::*;
 
     fn make_manager() -> SessionManager {
-        SessionManager::new(
-            "ollama/llama3".to_string(),
-            ThinkingLevel::Medium,
-        )
+        SessionManager::new("ollama/llama3".to_string(), ThinkingLevel::Medium)
     }
 
     #[test]

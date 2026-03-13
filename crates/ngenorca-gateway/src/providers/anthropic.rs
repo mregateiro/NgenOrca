@@ -243,12 +243,17 @@ impl ModelProvider for AnthropicProvider {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             // Try to extract structured error message
-            let display_body = if let Ok(err) = serde_json::from_str::<AnthropicErrorResponse>(&body) {
-                err.error.message
-            } else {
-                body
-            };
-            return Err(super::map_provider_http_error("Anthropic", status, display_body));
+            let display_body =
+                if let Ok(err) = serde_json::from_str::<AnthropicErrorResponse>(&body) {
+                    err.error.message
+                } else {
+                    body
+                };
+            return Err(super::map_provider_http_error(
+                "Anthropic",
+                status,
+                display_body,
+            ));
         }
 
         let anthropic_resp: AnthropicMessagesResponse = resp
@@ -306,7 +311,13 @@ mod tests {
 
     #[test]
     fn provider_name() {
-        let p = AnthropicProvider::new("https://api.anthropic.com", "sk-test".into(), "2023-06-01".into(), None, None);
+        let p = AnthropicProvider::new(
+            "https://api.anthropic.com",
+            "sk-test".into(),
+            "2023-06-01".into(),
+            None,
+            None,
+        );
         assert_eq!(p.provider_name(), "anthropic");
     }
 
@@ -351,7 +362,13 @@ mod tests {
     #[test]
     fn static_model_list() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let p = AnthropicProvider::new("https://api.anthropic.com", "sk-test".into(), "2023-06-01".into(), None, None);
+        let p = AnthropicProvider::new(
+            "https://api.anthropic.com",
+            "sk-test".into(),
+            "2023-06-01".into(),
+            None,
+            None,
+        );
         let models = rt.block_on(p.list_models()).unwrap();
         assert!(models.len() >= 3);
         assert!(models.iter().any(|m| m.id.contains("sonnet")));

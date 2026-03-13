@@ -209,7 +209,11 @@ impl ModelProvider for OpenAICompatProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(super::map_provider_http_error(&self.provider_label, status, body));
+            return Err(super::map_provider_http_error(
+                &self.provider_label,
+                status,
+                body,
+            ));
         }
 
         let models_resp: OpenAIModelsResponse = resp
@@ -279,7 +283,11 @@ impl ModelProvider for OpenAICompatProvider {
             } else {
                 body
             };
-            return Err(super::map_provider_http_error(&self.provider_label, status, display_body));
+            return Err(super::map_provider_http_error(
+                &self.provider_label,
+                status,
+                display_body,
+            ));
         }
 
         let openai_resp: OpenAIChatResponse = resp

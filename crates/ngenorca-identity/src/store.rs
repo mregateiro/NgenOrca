@@ -5,7 +5,7 @@ use ngenorca_core::identity::{
 };
 use ngenorca_core::types::{ChannelId, ChannelKind, DeviceId, TrustLevel, UserId};
 use ngenorca_core::{Error, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Mutex;
 
 pub struct IdentityStore {
@@ -62,7 +62,10 @@ impl IdentityStore {
     }
 
     pub fn save_user(&self, identity: &UserIdentity) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO users (user_id, display_name, role, created_at, last_seen)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -79,10 +82,15 @@ impl IdentityStore {
     }
 
     pub fn get_user(&self, user_id: &UserId) -> Result<Option<UserIdentity>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn
-            .prepare("SELECT display_name, role, created_at, last_seen FROM users WHERE user_id = ?1")
+            .prepare(
+                "SELECT display_name, role, created_at, last_seen FROM users WHERE user_id = ?1",
+            )
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let result = stmt
@@ -120,7 +128,10 @@ impl IdentityStore {
     }
 
     pub fn list_users(&self) -> Result<Vec<UserIdentity>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn
             .prepare("SELECT user_id FROM users ORDER BY created_at")
@@ -145,7 +156,10 @@ impl IdentityStore {
     }
 
     pub fn find_by_device(&self, device_id: &DeviceId) -> Result<Option<UserIdentity>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let user_id: Option<String> = conn
             .query_row(
@@ -169,7 +183,10 @@ impl IdentityStore {
         channel_kind: &ChannelKind,
         handle: &str,
     ) -> Result<Option<UserIdentity>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let kind_str = serde_json::to_string(channel_kind).unwrap();
 
@@ -191,7 +208,10 @@ impl IdentityStore {
     }
 
     pub fn add_device(&self, user_id: &UserId, device: &DeviceBinding) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO device_bindings
              (device_id, user_id, device_name, attestation, public_key_hash, trust, paired_at, last_used)
@@ -212,7 +232,10 @@ impl IdentityStore {
     }
 
     pub fn add_channel(&self, user_id: &UserId, binding: &ChannelBinding) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO channel_bindings
              (user_id, channel_id, channel_kind, handle, trust, linked_at)
@@ -231,7 +254,10 @@ impl IdentityStore {
     }
 
     pub fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         conn.execute(
             "DELETE FROM device_bindings WHERE user_id = ?1 AND device_id = ?2",
             params![user_id.0, device_id.0],
@@ -261,25 +287,44 @@ impl IdentityStore {
                 let trust: String = row.get(4)?;
                 let paired_at: String = row.get(5)?;
                 let last_used: String = row.get(6)?;
-                Ok((device_id, device_name, attestation, public_key_hash, trust, paired_at, last_used))
+                Ok((
+                    device_id,
+                    device_name,
+                    attestation,
+                    public_key_hash,
+                    trust,
+                    paired_at,
+                    last_used,
+                ))
             })
             .map_err(|e| Error::Database(e.to_string()))?
             .filter_map(|r| r.ok())
-            .map(|(device_id, device_name, attestation, public_key_hash, trust, paired_at, last_used)| {
-                DeviceBinding {
-                    device_id: DeviceId(device_id),
+            .map(
+                |(
+                    device_id,
                     device_name,
-                    attestation: serde_json::from_str(&attestation).unwrap_or(AttestationType::CompositeFingerprint),
+                    attestation,
                     public_key_hash,
-                    trust: serde_json::from_str(&trust).unwrap_or(TrustLevel::Channel),
-                    paired_at: chrono::DateTime::parse_from_rfc3339(&paired_at)
-                        .unwrap_or_default()
-                        .with_timezone(&chrono::Utc),
-                    last_used: chrono::DateTime::parse_from_rfc3339(&last_used)
-                        .unwrap_or_default()
-                        .with_timezone(&chrono::Utc),
-                }
-            })
+                    trust,
+                    paired_at,
+                    last_used,
+                )| {
+                    DeviceBinding {
+                        device_id: DeviceId(device_id),
+                        device_name,
+                        attestation: serde_json::from_str(&attestation)
+                            .unwrap_or(AttestationType::CompositeFingerprint),
+                        public_key_hash,
+                        trust: serde_json::from_str(&trust).unwrap_or(TrustLevel::Channel),
+                        paired_at: chrono::DateTime::parse_from_rfc3339(&paired_at)
+                            .unwrap_or_default()
+                            .with_timezone(&chrono::Utc),
+                        last_used: chrono::DateTime::parse_from_rfc3339(&last_used)
+                            .unwrap_or_default()
+                            .with_timezone(&chrono::Utc),
+                    }
+                },
+            )
             .collect();
 
         Ok(devices)
@@ -308,17 +353,18 @@ impl IdentityStore {
             })
             .map_err(|e| Error::Database(e.to_string()))?
             .filter_map(|r| r.ok())
-            .map(|(channel_id, channel_kind, handle, trust, linked_at)| {
-                ChannelBinding {
+            .map(
+                |(channel_id, channel_kind, handle, trust, linked_at)| ChannelBinding {
                     channel_id: ChannelId(channel_id),
-                    channel_kind: serde_json::from_str(&channel_kind).unwrap_or(ChannelKind::Custom("unknown".into())),
+                    channel_kind: serde_json::from_str(&channel_kind)
+                        .unwrap_or(ChannelKind::Custom("unknown".into())),
                     handle,
                     trust: serde_json::from_str(&trust).unwrap_or(TrustLevel::Channel),
                     linked_at: chrono::DateTime::parse_from_rfc3339(&linked_at)
                         .unwrap_or_default()
                         .with_timezone(&chrono::Utc),
-                }
-            })
+                },
+            )
             .collect();
 
         Ok(channels)

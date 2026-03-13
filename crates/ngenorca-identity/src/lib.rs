@@ -12,9 +12,9 @@ pub mod fingerprint;
 pub mod resolver;
 pub mod store;
 
+use ngenorca_core::Result;
 use ngenorca_core::identity::{UserIdentity, UserRole};
 use ngenorca_core::types::{ChannelId, ChannelKind, DeviceId, TrustLevel, UserId};
-use ngenorca_core::Result;
 use store::IdentityStore;
 use tracing::info;
 
@@ -276,12 +276,20 @@ mod tests {
         mgr.pair_device(&uid, device).unwrap();
 
         // Verify device exists
-        assert!(mgr.resolve_by_device(&DeviceId("dev-1".into())).unwrap().is_some());
+        assert!(
+            mgr.resolve_by_device(&DeviceId("dev-1".into()))
+                .unwrap()
+                .is_some()
+        );
 
         // Revoke it
         mgr.revoke_device(&uid, &DeviceId("dev-1".into())).unwrap();
 
         // Should no longer resolve
-        assert!(mgr.resolve_by_device(&DeviceId("dev-1".into())).unwrap().is_none());
+        assert!(
+            mgr.resolve_by_device(&DeviceId("dev-1".into()))
+                .unwrap()
+                .is_none()
+        );
     }
 }

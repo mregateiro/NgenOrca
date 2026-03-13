@@ -2,7 +2,7 @@
 
 use ngenorca_core::event::Event;
 use ngenorca_core::{Error, EventId, Result, SessionId};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Mutex;
 use tracing::debug;
 
@@ -54,7 +54,10 @@ impl EventLog {
 
     /// Append an event to the log.
     pub fn append(&self, event: &Event) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let payload = serde_json::to_string(&event.payload)?;
         let session_id = event.session_id.as_ref().map(|s| s.0.to_string());
@@ -82,7 +85,10 @@ impl EventLog {
         session_id: Option<&SessionId>,
         limit: Option<usize>,
     ) -> Result<Vec<Event>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match session_id {
             Some(sid) => {
@@ -106,7 +112,9 @@ impl EventLog {
             }
         };
 
-        let mut stmt = conn.prepare(&sql).map_err(|e| Error::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();
@@ -128,15 +136,15 @@ impl EventLog {
                 row.map_err(|e| Error::Database(e.to_string()))?;
 
             let event = Event {
-                id: EventId(id.parse().map_err(|e: ulid::DecodeError| {
-                    Error::Database(e.to_string())
-                })?),
+                id: EventId(
+                    id.parse()
+                        .map_err(|e: ulid::DecodeError| Error::Database(e.to_string()))?,
+                ),
                 timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
                     .map_err(|e| Error::Database(e.to_string()))?
                     .with_timezone(&chrono::Utc),
-                session_id: session_id.map(|s| {
-                    SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())
-                }),
+                session_id: session_id
+                    .map(|s| SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())),
                 user_id: user_id.map(ngenorca_core::UserId),
                 payload: serde_json::from_str(&payload)
                     .map_err(|e| Error::Database(e.to_string()))?,
@@ -149,7 +157,10 @@ impl EventLog {
 
     /// Query events after a specific event ID (for catch-up replay).
     pub fn query_after(&self, after_id: &EventId) -> Result<Vec<Event>> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut stmt = conn
             .prepare(
@@ -176,15 +187,15 @@ impl EventLog {
                 row.map_err(|e| Error::Database(e.to_string()))?;
 
             let event = Event {
-                id: EventId(id.parse().map_err(|e: ulid::DecodeError| {
-                    Error::Database(e.to_string())
-                })?),
+                id: EventId(
+                    id.parse()
+                        .map_err(|e: ulid::DecodeError| Error::Database(e.to_string()))?,
+                ),
                 timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
                     .map_err(|e| Error::Database(e.to_string()))?
                     .with_timezone(&chrono::Utc),
-                session_id: session_id.map(|s| {
-                    SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())
-                }),
+                session_id: session_id
+                    .map(|s| SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())),
                 user_id: user_id.map(ngenorca_core::UserId),
                 payload: serde_json::from_str(&payload)
                     .map_err(|e| Error::Database(e.to_string()))?,
@@ -197,7 +208,10 @@ impl EventLog {
 
     /// Get total event count.
     pub fn count(&self) -> Result<u64> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -208,7 +222,10 @@ impl EventLog {
     ///
     /// Returns the number of deleted events.
     pub fn prune_before(&self, older_than: chrono::DateTime<chrono::Utc>) -> Result<usize> {
-        let conn = self.conn.lock().map_err(|e| Error::Database(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let cutoff = older_than.to_rfc3339();
         let deleted = conn
             .execute("DELETE FROM events WHERE timestamp < ?1", [&cutoff])
@@ -281,10 +298,12 @@ mod tests {
         let other_session = SessionId::new();
 
         for _ in 0..3 {
-            log.append(&sample_event(Some(target_session.clone()), None)).unwrap();
+            log.append(&sample_event(Some(target_session.clone()), None))
+                .unwrap();
         }
         for _ in 0..2 {
-            log.append(&sample_event(Some(other_session.clone()), None)).unwrap();
+            log.append(&sample_event(Some(other_session.clone()), None))
+                .unwrap();
         }
 
         let events = log.query(Some(&target_session), None).unwrap();

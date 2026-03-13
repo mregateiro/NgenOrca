@@ -12,7 +12,7 @@ use ngenorca_core::message::Message;
 use ngenorca_core::types::PluginId;
 use ngenorca_core::{Error, Result};
 use ngenorca_plugin_sdk::{
-    flume_like, AgentTool, ChannelAdapter, Plugin, PluginContext, ToolDefinition,
+    AgentTool, ChannelAdapter, Plugin, PluginContext, ToolDefinition, flume_like,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,7 +90,11 @@ impl PluginRegistry {
     /// 1. `manifest()` — read metadata
     /// 2. `init()` — provide context (sender, config, data_dir)
     /// 3. If it's a `ChannelAdapter`, register for routing
-    pub async fn register(&self, mut plugin: Box<dyn Plugin>, config: serde_json::Value) -> Result<()> {
+    pub async fn register(
+        &self,
+        mut plugin: Box<dyn Plugin>,
+        config: serde_json::Value,
+    ) -> Result<()> {
         let manifest = plugin.manifest();
         let id = manifest.id.0.clone();
         let name = manifest.name.clone();
@@ -280,7 +284,9 @@ impl PluginRegistry {
                 e
             })
         } else {
-            Err(Error::NotFound(format!("Adapter index out of bounds: {index}")))
+            Err(Error::NotFound(format!(
+                "Adapter index out of bounds: {index}"
+            )))
         }
     }
 
@@ -429,7 +435,7 @@ impl PluginRegistry {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use ngenorca_core::plugin::{PluginKind, PluginManifest, API_VERSION};
+    use ngenorca_core::plugin::{API_VERSION, PluginKind, PluginManifest};
 
     /// A test plugin for verification.
     struct TestPlugin {
@@ -461,11 +467,15 @@ mod tests {
         }
 
         async fn init(&mut self, _ctx: PluginContext) -> ngenorca_core::Result<()> {
-            self.initialized.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.initialized
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
 
-        async fn handle_message(&self, _message: &Message) -> ngenorca_core::Result<Option<Message>> {
+        async fn handle_message(
+            &self,
+            _message: &Message,
+        ) -> ngenorca_core::Result<Option<Message>> {
             Ok(None)
         }
     }
@@ -596,19 +606,13 @@ mod tests {
         assert_eq!(registry.plugin_count().await, 0);
 
         registry
-            .register(
-                Box::new(TestPlugin::new("p1")),
-                serde_json::json!({}),
-            )
+            .register(Box::new(TestPlugin::new("p1")), serde_json::json!({}))
             .await
             .unwrap();
         assert_eq!(registry.plugin_count().await, 1);
 
         registry
-            .register(
-                Box::new(TestPlugin::new("p2")),
-                serde_json::json!({}),
-            )
+            .register(Box::new(TestPlugin::new("p2")), serde_json::json!({}))
             .await
             .unwrap();
         assert_eq!(registry.plugin_count().await, 2);

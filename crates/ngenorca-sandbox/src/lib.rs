@@ -99,7 +99,10 @@ fn is_container() -> bool {
     #[cfg(target_os = "linux")]
     {
         if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
-            if cgroup.contains("docker") || cgroup.contains("kubepods") || cgroup.contains("containerd") {
+            if cgroup.contains("docker")
+                || cgroup.contains("kubepods")
+                || cgroup.contains("containerd")
+            {
                 return true;
             }
         }
@@ -194,11 +197,7 @@ async fn exec_direct(
         std::time::Duration::from_secs(300) // 5 min default cap
     };
 
-    let result = tokio::time::timeout(
-        timeout,
-        Command::new(command).args(args).output(),
-    )
-    .await;
+    let result = tokio::time::timeout(timeout, Command::new(command).args(args).output()).await;
 
     match result {
         Ok(Ok(output)) => Ok(SandboxedOutput {
@@ -235,10 +234,10 @@ async fn exec_windows_job(
     use std::ptr::null;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+        JOB_OBJECT_LIMIT_PROCESS_TIME, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
 
     info!("Windows Job Object sandbox — enforcing limits");
@@ -253,8 +252,7 @@ async fn exec_windows_job(
     // ── Configure limits ──
     let mut ext_info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
 
-    let mut limit_flags: u32 = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+    let mut limit_flags: u32 = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
 
     // Memory limit
     if policy.memory_limit_bytes > 0 {
@@ -320,9 +318,10 @@ async fn exec_windows_job(
     // The job handle is a raw pointer, wrap it for safe Send across thread boundary.
     let job_raw = job as usize; // HANDLE is a pointer, store as usize for Send
 
-    let result = tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || {
-        child.wait_with_output()
-    }))
+    let result = tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(move || child.wait_with_output()),
+    )
     .await;
 
     // Clean up the job object (kills any remaining processes due to KILL_ON_JOB_CLOSE)
@@ -342,7 +341,10 @@ async fn exec_windows_job(
             // the child when we dropped/closed the job handle above.
             Ok(SandboxedOutput {
                 stdout: String::new(),
-                stderr: format!("Process timed out after {}s (Job Object killed)", policy.wall_timeout_secs),
+                stderr: format!(
+                    "Process timed out after {}s (Job Object killed)",
+                    policy.wall_timeout_secs
+                ),
                 exit_code: -1,
                 timed_out: true,
             })
@@ -441,11 +443,8 @@ async fn exec_linux_sandboxed(
 
     let str_args: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
 
-    let result = tokio::time::timeout(
-        timeout,
-        Command::new("unshare").args(&str_args).output(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(timeout, Command::new("unshare").args(&str_args).output()).await;
 
     match result {
         Ok(Ok(output)) => Ok(SandboxedOutput {
@@ -507,11 +506,8 @@ async fn exec_linux_prlimit(
 
     let str_args: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
 
-    let result = tokio::time::timeout(
-        timeout,
-        Command::new("prlimit").args(&str_args).output(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(timeout, Command::new("prlimit").args(&str_args).output()).await;
 
     match result {
         Ok(Ok(output)) => Ok(SandboxedOutput {
@@ -523,10 +519,7 @@ async fn exec_linux_prlimit(
         Ok(Err(e)) => Err(Error::Sandbox(format!("prlimit exec failed: {e}"))),
         Err(_) => Ok(SandboxedOutput {
             stdout: String::new(),
-            stderr: format!(
-                "Process timed out after {}s",
-                policy.wall_timeout_secs
-            ),
+            stderr: format!("Process timed out after {}s", policy.wall_timeout_secs),
             exit_code: -1,
             timed_out: true,
         }),
@@ -572,16 +565,10 @@ async fn exec_macos_sandboxed(
         profile.push_str("(allow file-read* (subpath \"/Library/Frameworks\"))\n");
         profile.push_str("(allow file-read* (subpath \"/dev\"))\n");
         // Allow reading the command binary itself
-        profile.push_str(&format!(
-            "(allow file-read* (literal \"{}\"))\n",
-            command
-        ));
+        profile.push_str(&format!("(allow file-read* (literal \"{}\"))\n", command));
     } else {
         for path in &policy.allow_read_paths {
-            profile.push_str(&format!(
-                "(allow file-read* (subpath \"{}\"))\n",
-                path
-            ));
+            profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path));
         }
         // Always allow system libs
         profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
@@ -590,10 +577,7 @@ async fn exec_macos_sandboxed(
 
     // File write access
     for path in &policy.allow_write_paths {
-        profile.push_str(&format!(
-            "(allow file-write* (subpath \"{}\"))\n",
-            path
-        ));
+        profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", path));
     }
     // Allow writing to /dev/null, /dev/tty
     profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
@@ -612,10 +596,8 @@ async fn exec_macos_sandboxed(
     }
 
     // Write the profile to a temp file
-    let profile_path = std::env::temp_dir().join(format!(
-        "ngenorca_sandbox_{}.sb",
-        std::process::id()
-    ));
+    let profile_path =
+        std::env::temp_dir().join(format!("ngenorca_sandbox_{}.sb", std::process::id()));
     if let Err(e) = std::fs::write(&profile_path, &profile) {
         warn!(error = %e, "Failed to write sandbox profile, falling back to basic exec");
         return exec_direct(command, args, policy).await;
@@ -734,7 +716,10 @@ mod tests {
         policy.allow_read_paths.push("/home/user".into());
         policy.allow_write_paths.push("/home/user/output".into());
         assert_eq!(policy.allow_read_paths, vec!["/home/user".to_string()]);
-        assert_eq!(policy.allow_write_paths, vec!["/home/user/output".to_string()]);
+        assert_eq!(
+            policy.allow_write_paths,
+            vec!["/home/user/output".to_string()]
+        );
     }
 
     // ─── SandboxedOutput tests ───
@@ -787,7 +772,10 @@ mod tests {
 
     #[tokio::test]
     async fn exec_timeout_works() {
-        let policy = SandboxPolicy { wall_timeout_secs: 1, ..SandboxPolicy::default() };
+        let policy = SandboxPolicy {
+            wall_timeout_secs: 1,
+            ..SandboxPolicy::default()
+        };
         // "ping -n 30 127.0.0.1" will take ~30 seconds on Windows
         let result = sandboxed_exec("ping", &["-n", "30", "127.0.0.1"], &policy).await;
         assert!(result.is_ok());

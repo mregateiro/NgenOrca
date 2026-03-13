@@ -12,10 +12,10 @@
 //! to judge answer quality, returning Accept / Escalate / Augment.
 
 use async_trait::async_trait;
+use ngenorca_core::Result;
 use ngenorca_core::orchestration::{
     QualityMethod, QualityVerdict, TaskClassification, TaskComplexity, TaskIntent,
 };
-use ngenorca_core::Result;
 use ngenorca_plugin_sdk::{
     ChatCompletionRequest, ChatCompletionResponse, ChatMessage, QualityGate,
 };
@@ -181,9 +181,7 @@ impl QualityGate for HeuristicQualityGate {
         );
 
         Ok((
-            QualityVerdict::Accept {
-                score: Some(score),
-            },
+            QualityVerdict::Accept { score: Some(score) },
             QualityMethod::Heuristic,
         ))
     }
@@ -226,7 +224,10 @@ impl LlmQualityGate {
         );
 
         vec![
-            ChatMessage { role: "system".into(), content: system },
+            ChatMessage {
+                role: "system".into(),
+                content: system,
+            },
             ChatMessage {
                 role: "user".into(),
                 content: format!(
@@ -249,7 +250,10 @@ impl LlmQualityGate {
                 .nth(1)
                 .and_then(|s| s.parse::<f64>().ok())
                 .map(|s| s.clamp(0.0, 1.0));
-            (QualityVerdict::Accept { score }, QualityMethod::LlmEvaluator)
+            (
+                QualityVerdict::Accept { score },
+                QualityMethod::LlmEvaluator,
+            )
         } else if lower.starts_with("escalate") {
             let reason = trimmed
                 .get("escalate".len()..)
@@ -314,7 +318,11 @@ impl LlmQualityGate {
                 let (mut verdict, method) = Self::parse_verdict(&output);
 
                 // If the verdict is Augment, fill in the partial response
-                if let QualityVerdict::Augment { ref mut partial_response, .. } = verdict {
+                if let QualityVerdict::Augment {
+                    ref mut partial_response,
+                    ..
+                } = verdict
+                {
                     *partial_response = response_text.to_string();
                 }
 
@@ -400,9 +408,14 @@ mod tests {
     async fn test_accept_good_response() {
         let gate = HeuristicQualityGate::default();
         let task = make_task(TaskIntent::Summarization, TaskComplexity::Simple);
-        let resp = make_response("This article discusses the key principles of network security, including encryption, firewalls, and access control.");
+        let resp = make_response(
+            "This article discusses the key principles of network security, including encryption, firewalls, and access control.",
+        );
 
-        let (verdict, _) = gate.evaluate(&task, &resp, "resume este artigo").await.unwrap();
+        let (verdict, _) = gate
+            .evaluate(&task, &resp, "resume este artigo")
+            .await
+            .unwrap();
         assert!(matches!(verdict, QualityVerdict::Accept { .. }));
     }
 
@@ -420,9 +433,14 @@ mod tests {
     async fn test_detect_refusal() {
         let gate = HeuristicQualityGate::default();
         let task = make_task(TaskIntent::Coding, TaskComplexity::Moderate);
-        let resp = make_response("I'm sorry, but as an AI language model, I cannot write code that accesses the filesystem.");
+        let resp = make_response(
+            "I'm sorry, but as an AI language model, I cannot write code that accesses the filesystem.",
+        );
 
-        let (verdict, _) = gate.evaluate(&task, &resp, "write a file reader").await.unwrap();
+        let (verdict, _) = gate
+            .evaluate(&task, &resp, "write a file reader")
+            .await
+            .unwrap();
         assert!(matches!(verdict, QualityVerdict::Escalate { .. }));
     }
 
@@ -444,13 +462,17 @@ mod tests {
     #[test]
     fn parse_escalate() {
         let (v, _) = LlmQualityGate::parse_verdict("ESCALATE response is factually incorrect");
-        assert!(matches!(v, QualityVerdict::Escalate { reason, .. } if reason.contains("factually")));
+        assert!(
+            matches!(v, QualityVerdict::Escalate { reason, .. } if reason.contains("factually"))
+        );
     }
 
     #[test]
     fn parse_augment() {
         let (v, _) = LlmQualityGate::parse_verdict("AUGMENT missing error handling discussion");
-        assert!(matches!(v, QualityVerdict::Augment { missing, .. } if missing.contains("error handling")));
+        assert!(
+            matches!(v, QualityVerdict::Augment { missing, .. } if missing.contains("error handling"))
+        );
     }
 
     #[test]

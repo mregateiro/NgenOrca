@@ -1,14 +1,13 @@
 //! HTTP routes and WebSocket handler.
 
 use axum::{
+    Extension, Router,
     extract::{
-        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
     },
-    response::{Json, IntoResponse},
+    response::{IntoResponse, Json},
     routing::{get, post},
-    Extension,
-    Router,
 };
 use futures::{SinkExt, StreamExt};
 use ngenorca_core::types::UserId;
@@ -26,17 +25,32 @@ use crate::state::AppState;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(root))
+        .route("/config", get(crate::config_ui::config_page))
         .route("/health", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/version", get(version))
+        .route(
+            "/api/v1/config/effective",
+            get(crate::config_ui::get_effective_config),
+        )
+        .route(
+            "/api/v1/config/file",
+            get(crate::config_ui::get_config_file).put(crate::config_ui::save_config_file),
+        )
         .route("/api/v1/whoami", get(whoami))
         .route("/api/v1/providers", get(providers))
         .route("/api/v1/channels", get(channels))
         .route("/api/v1/orchestration", get(orchestration_info))
-        .route("/api/v1/orchestration/classify", axum::routing::post(classify_preview))
+        .route(
+            "/api/v1/orchestration/classify",
+            axum::routing::post(classify_preview),
+        )
         .route("/api/v1/identity/users", get(list_users))
         .route("/api/v1/memory/stats", get(memory_stats))
-        .route("/api/v1/memory/user/{user_id}", axum::routing::delete(delete_user_data))
+        .route(
+            "/api/v1/memory/user/{user_id}",
+            axum::routing::delete(delete_user_data),
+        )
         .route("/api/v1/events/count", get(event_count))
         // ── New endpoints ──
         .route("/api/v1/chat", post(chat))
@@ -56,6 +70,9 @@ async fn root() -> Json<serde_json::Value> {
         "description": "Personal AI Assistant — microkernel, hardware-bound identity, three-tier memory",
         "endpoints": {
             "health": "/health",
+            "config_ui": "/config",
+            "config_file": "/api/v1/config/file",
+            "config_effective": "/api/v1/config/effective",
             "status": "/api/v1/status",
             "whoami": "/api/v1/whoami",
             "chat": "POST /api/v1/chat",
@@ -93,9 +110,7 @@ async fn version() -> Json<serde_json::Value> {
 
 /// Who am I? Shows the caller's identity as resolved by the auth middleware.
 /// Useful for verifying Authelia → nginx → NgenOrca identity flow.
-async fn whoami(
-    Extension(caller): Extension<CallerIdentity>,
-) -> Json<serde_json::Value> {
+async fn whoami(Extension(caller): Extension<CallerIdentity>) -> Json<serde_json::Value> {
     Json(json!({
         "username": caller.username,
         "email": caller.email,
@@ -148,9 +163,7 @@ async fn status(
 }
 
 /// Show configured LLM providers and which is active.
-async fn providers(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn providers(State(state): State<AppState>) -> Json<serde_json::Value> {
     let (active_provider, active_model) = state.config().parse_model();
     let providers = &state.config().agent.providers;
 
@@ -202,9 +215,7 @@ async fn providers(
 }
 
 /// Show configured channels and their status.
-async fn channels(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn channels(State(state): State<AppState>) -> Json<serde_json::Value> {
     let ch = &state.config().channels;
 
     Json(json!({
@@ -365,9 +376,7 @@ async fn event_count(State(state): State<AppState>) -> Json<serde_json::Value> {
 }
 
 /// Show orchestration configuration and sub-agents.
-async fn orchestration_info(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn orchestration_info(State(state): State<AppState>) -> Json<serde_json::Value> {
     let orch = HybridOrchestrator::new(std::sync::Arc::new(state.config().clone()));
     let info = orch.info();
     Json(serde_json::to_value(info).unwrap_or_else(|_| json!({ "error": "serialization failed" })))
@@ -490,7 +499,9 @@ async fn chat(
         }));
     }
 
-    let user_id = caller.username.as_ref()
+    let user_id = caller
+        .username
+        .as_ref()
         .filter(|u| !u.is_empty())
         .map(|u| UserId(u.clone()));
 
@@ -503,21 +514,30 @@ async fn chat(
                 if state.sessions().get(&sid).is_some() {
                     sid
                 } else {
-                    match state.sessions().get_or_create(user_id.as_ref(), &body.channel) {
+                    match state
+                        .sessions()
+                        .get_or_create(user_id.as_ref(), &body.channel)
+                    {
                         Ok(sid) => sid,
                         Err(e) => return Json(json!({ "error": e.to_string() })),
                     }
                 }
             }
             Err(_) => {
-                match state.sessions().get_or_create(user_id.as_ref(), &body.channel) {
+                match state
+                    .sessions()
+                    .get_or_create(user_id.as_ref(), &body.channel)
+                {
                     Ok(sid) => sid,
                     Err(e) => return Json(json!({ "error": e.to_string() })),
                 }
             }
         }
     } else {
-        match state.sessions().get_or_create(user_id.as_ref(), &body.channel) {
+        match state
+            .sessions()
+            .get_or_create(user_id.as_ref(), &body.channel)
+        {
             Ok(sid) => sid,
             Err(e) => return Json(json!({ "error": e.to_string() })),
         }
@@ -528,64 +548,62 @@ async fn chat(
 
     // Inject memory context if available
     if state.config().memory.enabled
-        && let Some(ref uid) = user_id {
-            let token_budget = state.config().memory.semantic_token_budget;
-            match state
-                .memory()
-                .build_context(uid, &session_id, &body.message, token_budget)
-            {
-                Ok(ctx) => {
-                    // Prepend semantic facts as system context
-                    if !ctx.semantic_block.is_empty() {
-                        let facts: Vec<String> = ctx
-                            .semantic_block
-                            .iter()
-                            .map(|f| format!("- {}", f.fact))
-                            .collect();
-                        conversation.insert(
-                            0,
-                            ChatMessage {
-                                role: "system".into(),
-                                content: format!(
-                                    "Known facts about the user:\n{}",
-                                    facts.join("\n")
-                                ),
-                            },
-                        );
-                    }
-
-                    // Add episodic snippets as context
-                    if !ctx.episodic_snippets.is_empty() {
-                        let snippets: Vec<String> = ctx
-                            .episodic_snippets
-                            .iter()
-                            .map(|e| e.content.clone())
-                            .collect();
-                        conversation.insert(
-                            0,
-                            ChatMessage {
-                                role: "system".into(),
-                                content: format!(
-                                    "Relevant past conversations:\n{}",
-                                    snippets.join("\n---\n")
-                                ),
-                            },
-                        );
-                    }
-
-                    // Add working memory (current session messages)
-                    for wm in &ctx.working_messages {
-                        conversation.push(ChatMessage {
-                            role: wm.role.clone(),
-                            content: wm.content.clone(),
-                        });
-                    }
+        && let Some(ref uid) = user_id
+    {
+        let token_budget = state.config().memory.semantic_token_budget;
+        match state
+            .memory()
+            .build_context(uid, &session_id, &body.message, token_budget)
+        {
+            Ok(ctx) => {
+                // Prepend semantic facts as system context
+                if !ctx.semantic_block.is_empty() {
+                    let facts: Vec<String> = ctx
+                        .semantic_block
+                        .iter()
+                        .map(|f| format!("- {}", f.fact))
+                        .collect();
+                    conversation.insert(
+                        0,
+                        ChatMessage {
+                            role: "system".into(),
+                            content: format!("Known facts about the user:\n{}", facts.join("\n")),
+                        },
+                    );
                 }
-                Err(e) => {
-                    warn!(error = %e, "Failed to build memory context");
+
+                // Add episodic snippets as context
+                if !ctx.episodic_snippets.is_empty() {
+                    let snippets: Vec<String> = ctx
+                        .episodic_snippets
+                        .iter()
+                        .map(|e| e.content.clone())
+                        .collect();
+                    conversation.insert(
+                        0,
+                        ChatMessage {
+                            role: "system".into(),
+                            content: format!(
+                                "Relevant past conversations:\n{}",
+                                snippets.join("\n---\n")
+                            ),
+                        },
+                    );
+                }
+
+                // Add working memory (current session messages)
+                for wm in &ctx.working_messages {
+                    conversation.push(ChatMessage {
+                        role: wm.role.clone(),
+                        content: wm.content.clone(),
+                    });
                 }
             }
+            Err(e) => {
+                warn!(error = %e, "Failed to build memory context");
+            }
         }
+    }
 
     // ── Store user message in working memory ──
     state.memory().working.push(
@@ -602,12 +620,20 @@ async fn chat(
     let orch = HybridOrchestrator::new(Arc::new(state.config().clone()));
 
     match orch
-        .process(&body.message, &conversation, state.providers(), Some(state.plugins()), None)
+        .process(
+            &body.message,
+            &conversation,
+            state.providers(),
+            Some(state.plugins()),
+            None,
+        )
         .await
     {
         Ok((response, record)) => {
             state.metrics().inc_orchestrations();
-            state.metrics().add_tokens(response.total_usage.total_tokens as u64);
+            state
+                .metrics()
+                .add_tokens(response.total_usage.total_tokens as u64);
             if response.escalated {
                 state.metrics().inc_escalations();
             }
@@ -665,10 +691,7 @@ async fn chat(
             Json(json!(ChatResponse {
                 content: response.content,
                 session_id: session_id.to_string(),
-                served_by: format!(
-                    "{}/{}",
-                    response.served_by.name, response.served_by.model
-                ),
+                served_by: format!("{}/{}", response.served_by.name, response.served_by.model),
                 classification: ClassificationInfo {
                     intent: format!("{:?}", response.classification.intent),
                     complexity: format!("{:?}", response.classification.complexity),
@@ -693,9 +716,7 @@ async fn chat(
 }
 
 /// GET /api/v1/sessions — list active sessions.
-async fn list_sessions(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn list_sessions(State(state): State<AppState>) -> Json<serde_json::Value> {
     let sessions = state.sessions().active_sessions();
     let session_list: Vec<serde_json::Value> = sessions
         .iter()
@@ -755,7 +776,12 @@ async fn handle_whatsapp_webhook(
     let ch = &state.config().channels;
     let wa = match ch.whatsapp.as_ref().filter(|c| c.enabled) {
         Some(c) => c,
-        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "WhatsApp not enabled" }))),
+        None => {
+            return (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({ "error": "WhatsApp not enabled" })),
+            );
+        }
     };
 
     // SEC-05: Verify webhook signature when app_secret is configured.
@@ -797,7 +823,12 @@ async fn handle_slack_webhook(
     let ch = &state.config().channels;
     let sl = match ch.slack.as_ref().filter(|c| c.enabled) {
         Some(c) => c,
-        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "Slack not enabled" }))),
+        None => {
+            return (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Slack not enabled" })),
+            );
+        }
     };
 
     // SEC-05: Verify Slack webhook signature when signing_secret is configured.
@@ -825,7 +856,10 @@ async fn handle_slack_webhook(
         && val.get("type").and_then(|v| v.as_str()) == Some("url_verification")
     {
         let challenge = val.get("challenge").and_then(|v| v.as_str()).unwrap_or("");
-        return (axum::http::StatusCode::OK, Json(json!({ "challenge": challenge })));
+        return (
+            axum::http::StatusCode::OK,
+            Json(json!({ "challenge": challenge })),
+        );
     }
 
     (axum::http::StatusCode::OK, Json(json!({ "status": "ok" })))
@@ -839,7 +873,12 @@ async fn handle_telegram_webhook(
     let ch = &state.config().channels;
     let tg = match ch.telegram.as_ref().filter(|c| c.enabled) {
         Some(c) => c,
-        None => return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "Telegram not enabled" }))),
+        None => {
+            return (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Telegram not enabled" })),
+            );
+        }
     };
 
     // SEC-05: Verify Telegram webhook secret token (fail-closed).
@@ -967,10 +1006,12 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
         warn!("WebSocket connection rejected — max connections ({WS_MAX_CONNECTIONS}) reached");
         // Close immediately with policy violation code.
         let mut socket = socket;
-        let _ = socket.send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
-            code: 1008, // Policy Violation
-            reason: "Max concurrent connections reached".into(),
-        }))).await;
+        let _ = socket
+            .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
+                code: 1008, // Policy Violation
+                reason: "Max concurrent connections reached".into(),
+            })))
+            .await;
         return;
     }
 
@@ -980,7 +1021,9 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
     // Subscribe to real-time events from the bus for push notifications.
     let mut event_rx = state.event_bus().subscribe();
 
-    let user_id = caller.username.as_ref()
+    let user_id = caller
+        .username
+        .as_ref()
         .filter(|u| !u.is_empty())
         .map(|u| UserId(u.clone()));
 
@@ -1165,10 +1208,7 @@ async fn handle_client_message(
     }
 
     // Get or create session
-    let session_id = match state
-        .sessions()
-        .get_or_create(user_id, "websocket")
-    {
+    let session_id = match state.sessions().get_or_create(user_id, "websocket") {
         Ok(sid) => sid,
         Err(e) => {
             let err_resp = WsChatResponse {
@@ -1227,12 +1267,20 @@ async fn handle_client_message(
     let orch = HybridOrchestrator::new(Arc::new(state.config().clone()));
 
     let response = match orch
-        .process(&ws_msg.message, &conversation, state.providers(), Some(state.plugins()), None)
+        .process(
+            &ws_msg.message,
+            &conversation,
+            state.providers(),
+            Some(state.plugins()),
+            None,
+        )
         .await
     {
         Ok((resp, record)) => {
             state.metrics().inc_orchestrations();
-            state.metrics().add_tokens(resp.total_usage.total_tokens as u64);
+            state
+                .metrics()
+                .add_tokens(resp.total_usage.total_tokens as u64);
             if resp.escalated {
                 state.metrics().inc_escalations();
             }
@@ -1273,10 +1321,7 @@ async fn handle_client_message(
                 msg_type: "response".into(),
                 content: Some(resp.content),
                 session_id: Some(session_id.to_string()),
-                served_by: Some(format!(
-                    "{}/{}",
-                    resp.served_by.name, resp.served_by.model
-                )),
+                served_by: Some(format!("{}/{}", resp.served_by.name, resp.served_by.model)),
                 error: None,
                 latency_ms: Some(resp.latency_ms),
             }
@@ -1296,9 +1341,10 @@ async fn handle_client_message(
     };
 
     if let Ok(json) = serde_json::to_string(&response)
-        && sender.send(WsMessage::Text(json.into())).await.is_err() {
-            return Err(true); // Client disconnected
-        }
+        && sender.send(WsMessage::Text(json.into())).await.is_err()
+    {
+        return Err(true); // Client disconnected
+    }
 
     Ok(())
 }

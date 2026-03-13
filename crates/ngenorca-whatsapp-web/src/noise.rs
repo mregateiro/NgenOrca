@@ -136,10 +136,7 @@ impl NoiseHandler {
     ///
     /// Returns the decrypted server payload (typically contains the server's
     /// certificate / static key).
-    pub fn process_server_hello(
-        &mut self,
-        server_hello: &[u8],
-    ) -> crate::Result<Vec<u8>> {
+    pub fn process_server_hello(&mut self, server_hello: &[u8]) -> crate::Result<Vec<u8>> {
         if server_hello.len() < 32 {
             return Err(crate::Error::Noise("server hello too short".into()));
         }
@@ -165,7 +162,9 @@ impl NoiseHandler {
 
         // Decrypt server's static key (48 bytes: 32 key + 16 GCM tag).
         if rest.len() < 48 {
-            return Err(crate::Error::Noise("server hello: missing static key".into()));
+            return Err(crate::Error::Noise(
+                "server hello: missing static key".into(),
+            ));
         }
         let server_static_enc = &rest[..48];
         let server_static_dec = self.decrypt_and_hash(server_static_enc)?;
@@ -181,7 +180,10 @@ impl NoiseHandler {
         let payload_enc = &rest[48..];
         let payload = self.decrypt_and_hash(payload_enc)?;
 
-        debug!("Noise: server hello processed, payload len={}", payload.len());
+        debug!(
+            "Noise: server hello processed, payload len={}",
+            payload.len()
+        );
         Ok(payload)
     }
 
@@ -189,10 +191,7 @@ impl NoiseHandler {
     ///
     /// Encrypts our static key and the given payload (ClientPayload proto)
     /// into the final handshake message.
-    pub fn build_client_finish(
-        &mut self,
-        payload: &[u8],
-    ) -> crate::Result<Vec<u8>> {
+    pub fn build_client_finish(&mut self, payload: &[u8]) -> crate::Result<Vec<u8>> {
         // Encrypt our static public key.
         let pub_bytes = self.static_public.as_bytes().to_vec();
         let static_enc = self.encrypt_and_hash(&pub_bytes)?;
@@ -268,8 +267,7 @@ impl NoiseHandler {
 
     /// Mix DH output into the chaining key and derive a new encryption key.
     fn mix_key(&mut self, dh_output: &[u8]) {
-        let derived =
-            crypto::hkdf_sha256(&self.ck, dh_output, &[], 64).expect("HKDF for mix_key");
+        let derived = crypto::hkdf_sha256(&self.ck, dh_output, &[], 64).expect("HKDF for mix_key");
         self.ck.copy_from_slice(&derived[..32]);
         self.enc_key.copy_from_slice(&derived[32..64]);
         trace!("Noise: mix_key, new ck = {:02x?}", &self.ck[..8]);
@@ -294,8 +292,7 @@ impl NoiseHandler {
 
     /// Split the chaining key into send and receive transport keys.
     fn split_keys(&mut self) -> crate::Result<()> {
-        let derived =
-            crypto::hkdf_sha256(&self.ck, &[], &[], 64).expect("HKDF for split");
+        let derived = crypto::hkdf_sha256(&self.ck, &[], &[], 64).expect("HKDF for split");
         let mut send = [0u8; 32];
         let mut recv = [0u8; 32];
         send.copy_from_slice(&derived[..32]);

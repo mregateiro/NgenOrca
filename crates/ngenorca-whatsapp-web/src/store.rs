@@ -28,7 +28,10 @@ impl FileStore {
     pub async fn new(data_dir: impl Into<PathBuf>) -> crate::Result<Self> {
         let data_dir = data_dir.into();
         fs::create_dir_all(&data_dir).await.map_err(|e| {
-            crate::Error::Store(format!("cannot create data dir {}: {e}", data_dir.display()))
+            crate::Error::Store(format!(
+                "cannot create data dir {}: {e}",
+                data_dir.display()
+            ))
         })?;
         debug!(path = %data_dir.display(), "FileStore initialized");
         Ok(Self { data_dir })
@@ -127,7 +130,13 @@ impl FileStore {
         // Sanitize JID for filename.
         let safe_name: String = jid
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         self.sessions_dir().join(format!("{safe_name}.json"))
     }

@@ -1,7 +1,7 @@
 //! Identity resolver — determines who is talking from any surface.
 
-use ngenorca_core::types::{ChannelKind, DeviceId, TrustLevel, UserId};
 use ngenorca_core::Result;
+use ngenorca_core::types::{ChannelKind, DeviceId, TrustLevel, UserId};
 
 use crate::IdentityManager;
 
@@ -122,8 +122,7 @@ fn verify_device_signature(
     use ring::signature;
 
     let pub_bytes = base64::engine::general_purpose::STANDARD.decode(public_key_b64)?;
-    let public_key =
-        signature::UnparsedPublicKey::new(&signature::ED25519, &pub_bytes);
+    let public_key = signature::UnparsedPublicKey::new(&signature::ED25519, &pub_bytes);
 
     Ok(public_key.verify(message, signature).is_ok())
 }
@@ -197,7 +196,8 @@ mod tests {
 
         // Store the base64-encoded public key as `public_key_hash`.
         use base64::Engine;
-        let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+        let pub_b64 =
+            base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
 
         let device = ngenorca_core::identity::DeviceBinding {
             device_id: DeviceId("dev-ed25519".into()),
@@ -238,13 +238,9 @@ mod tests {
         let message = b"hello NgenOrca";
         let sig = key_pair.sign(message);
 
-        let result = resolve_from_device(
-            &mgr,
-            &DeviceId("dev-ed25519".into()),
-            sig.as_ref(),
-            message,
-        )
-        .unwrap();
+        let result =
+            resolve_from_device(&mgr, &DeviceId("dev-ed25519".into()), sig.as_ref(), message)
+                .unwrap();
 
         assert_eq!(result.user_id, Some(UserId("bob".into())));
         assert_eq!(result.trust, TrustLevel::Hardware);
@@ -257,13 +253,8 @@ mod tests {
         let message = b"hello NgenOrca";
         let bad_sig = vec![0u8; 64]; // wrong signature
 
-        let result = resolve_from_device(
-            &mgr,
-            &DeviceId("dev-ed25519".into()),
-            &bad_sig,
-            message,
-        )
-        .unwrap();
+        let result =
+            resolve_from_device(&mgr, &DeviceId("dev-ed25519".into()), &bad_sig, message).unwrap();
 
         assert_eq!(result.user_id, Some(UserId("bob".into())));
         assert_eq!(result.trust, TrustLevel::Unknown);
@@ -274,7 +265,8 @@ mod tests {
     fn resolve_corrupt_public_key_challenges() {
         let mgr = IdentityManager::new(":memory:").unwrap();
         let uid = UserId("carol".into());
-        mgr.register_user(uid.clone(), "Carol".into(), UserRole::Owner).unwrap();
+        mgr.register_user(uid.clone(), "Carol".into(), UserRole::Owner)
+            .unwrap();
 
         let device = ngenorca_core::identity::DeviceBinding {
             device_id: DeviceId("dev-bad-key".into()),
@@ -325,13 +317,14 @@ mod tests {
 
     #[test]
     fn verify_device_signature_valid() {
-        use ring::signature::{Ed25519KeyPair, KeyPair as _};
         use base64::Engine;
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
 
         let rng = ring::rand::SystemRandom::new();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
         let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-        let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+        let pub_b64 =
+            base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
 
         let msg = b"test message";
         let sig = key_pair.sign(msg);
@@ -341,13 +334,14 @@ mod tests {
 
     #[test]
     fn verify_device_signature_invalid() {
-        use ring::signature::{Ed25519KeyPair, KeyPair as _};
         use base64::Engine;
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
 
         let rng = ring::rand::SystemRandom::new();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
         let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-        let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+        let pub_b64 =
+            base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
 
         let msg = b"test message";
         let wrong_sig = vec![0u8; 64];

@@ -16,7 +16,7 @@ use crate::transport::Transport;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tracing::{debug, error, info, warn};
 
 /// Events emitted by the client.
@@ -218,9 +218,9 @@ impl WhatsAppClient {
 
                 self.connected
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                let _ = self.event_tx.send(WhatsAppEvent::Connected {
-                    jid: pair_data.jid,
-                });
+                let _ = self
+                    .event_tx
+                    .send(WhatsAppEvent::Connected { jid: pair_data.jid });
 
                 paired = true;
                 break;
@@ -300,20 +300,14 @@ impl WhatsAppClient {
     }
 
     /// Extract a text message from a message node.
-    fn handle_message_node(
-        event_tx: &mpsc::UnboundedSender<WhatsAppEvent>,
-        node: &WaNode,
-    ) {
+    fn handle_message_node(event_tx: &mpsc::UnboundedSender<WhatsAppEvent>, node: &WaNode) {
         let from = node
             .attr("from")
             .or_else(|| node.attr("participant"))
             .unwrap_or("unknown")
             .to_string();
         let message_id = node.attr("id").unwrap_or("").to_string();
-        let timestamp: u64 = node
-            .attr("t")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        let timestamp: u64 = node.attr("t").and_then(|s| s.parse().ok()).unwrap_or(0);
 
         // The message body is typically in a child node.
         // In the E2E flow, it would be an encrypted Signal blob
@@ -372,10 +366,7 @@ impl WhatsAppClient {
             return Err(crate::Error::Closed);
         }
 
-        let transport = self
-            .transport
-            .as_ref()
-            .ok_or(crate::Error::Closed)?;
+        let transport = self.transport.as_ref().ok_or(crate::Error::Closed)?;
 
         let msg_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..20].to_string();
         let timestamp = chrono::Utc::now().timestamp().to_string();

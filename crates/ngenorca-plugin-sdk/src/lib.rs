@@ -17,9 +17,9 @@
 //! 4. `shutdown()` — graceful teardown
 
 use async_trait::async_trait;
-use ngenorca_core::message::Message;
-use ngenorca_core::plugin::{PluginManifest, API_VERSION};
 use ngenorca_core::Result;
+use ngenorca_core::message::Message;
+use ngenorca_core::plugin::{API_VERSION, PluginManifest};
 
 /// Context provided to plugins by the gateway.
 pub struct PluginContext {
@@ -192,8 +192,8 @@ pub struct Usage {
 // ─── Multi-Agent Orchestration Traits ───────────────────────────
 
 use ngenorca_core::orchestration::{
-    LearnedRoutingRule, OrchestrationRecord, QualityMethod, QualityVerdict,
-    RoutingDecision, SubAgentId, TaskClassification,
+    LearnedRoutingRule, OrchestrationRecord, QualityMethod, QualityVerdict, RoutingDecision,
+    SubAgentId, TaskClassification,
 };
 
 /// Trait for task classifiers — determine what kind of task a message represents.
@@ -356,8 +356,14 @@ mod tests {
         let req = ChatCompletionRequest {
             model: "gpt-4".into(),
             messages: vec![
-                ChatMessage { role: "system".into(), content: "You are helpful.".into() },
-                ChatMessage { role: "user".into(), content: "Hi".into() },
+                ChatMessage {
+                    role: "system".into(),
+                    content: "You are helpful.".into(),
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: "Hi".into(),
+                },
             ],
             tools: None,
             max_tokens: Some(1024),
@@ -471,7 +477,10 @@ mod tests {
     // ─── Helper to build SubAgentId ───
 
     fn agent_id(name: &str, model: &str) -> SubAgentId {
-        SubAgentId { name: name.into(), model: model.into() }
+        SubAgentId {
+            name: name.into(),
+            model: model.into(),
+        }
     }
 
     fn sample_classification() -> TaskClassification {
@@ -572,7 +581,10 @@ mod tests {
         };
         sender.send(event).unwrap();
         let received = rx.recv().await.unwrap();
-        assert!(matches!(received.payload, EventPayload::SystemLifecycle(LifecycleEvent::GatewayStarted)));
+        assert!(matches!(
+            received.payload,
+            EventPayload::SystemLifecycle(LifecycleEvent::GatewayStarted)
+        ));
     }
 
     #[tokio::test]

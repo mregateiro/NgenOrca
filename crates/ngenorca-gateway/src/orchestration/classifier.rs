@@ -4,10 +4,10 @@
 //! Falls through to SLM/LLM classifiers when confidence is low.
 
 use async_trait::async_trait;
+use ngenorca_core::Result;
 use ngenorca_core::orchestration::{
     ClassificationMethod, TaskClassification, TaskComplexity, TaskIntent,
 };
-use ngenorca_core::Result;
 use ngenorca_plugin_sdk::{ChatMessage, TaskClassifier};
 use tracing::debug;
 
@@ -45,8 +45,8 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Summarization,
         keywords: &[
-            "resum", "summar", "sintetiz", "tldr", "tl;dr", "condensa",
-            "shorten", "brief", "digest",
+            "resum", "summar", "sintetiz", "tldr", "tl;dr", "condensa", "shorten", "brief",
+            "digest",
         ],
         base_complexity: TaskComplexity::Simple,
         confidence: 0.85,
@@ -54,9 +54,17 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Translation,
         keywords: &[
-            "traduz", "translat", "traduc", "converti", "em inglês",
-            "em português", "in english", "in portuguese", "en español",
-            "übersetze", "traduire",
+            "traduz",
+            "translat",
+            "traduc",
+            "converti",
+            "em inglês",
+            "em português",
+            "in english",
+            "in portuguese",
+            "en español",
+            "übersetze",
+            "traduire",
         ],
         base_complexity: TaskComplexity::Simple,
         confidence: 0.90,
@@ -64,11 +72,33 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Coding,
         keywords: &[
-            "código", "code", "function", "função", "class", "struct",
-            "impl ", "debug", "fix this", "corrige", "refactor", "compile",
-            "error:", "panic", "bug", "programa", "script", "api",
-            "endpoint", "query", "sql", "html", "css", "python", "rust",
-            "javascript", "typescript",
+            "código",
+            "code",
+            "function",
+            "função",
+            "class",
+            "struct",
+            "impl ",
+            "debug",
+            "fix this",
+            "corrige",
+            "refactor",
+            "compile",
+            "error:",
+            "panic",
+            "bug",
+            "programa",
+            "script",
+            "api",
+            "endpoint",
+            "query",
+            "sql",
+            "html",
+            "css",
+            "python",
+            "rust",
+            "javascript",
+            "typescript",
         ],
         base_complexity: TaskComplexity::Moderate,
         confidence: 0.80,
@@ -76,8 +106,16 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Analysis,
         keywords: &[
-            "analis", "analyz", "compar", "evaluat", "avali", "diagnos",
-            "investig", "explain why", "explica porquê", "what went wrong",
+            "analis",
+            "analyz",
+            "compar",
+            "evaluat",
+            "avali",
+            "diagnos",
+            "investig",
+            "explain why",
+            "explica porquê",
+            "what went wrong",
             "root cause",
         ],
         base_complexity: TaskComplexity::Complex,
@@ -86,9 +124,23 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Creative,
         keywords: &[
-            "escreve", "write", "cria", "creat", "story", "história",
-            "poem", "poema", "email", "carta", "letter", "brainstorm",
-            "ideia", "idea", "slogan", "tagline", "name for",
+            "escreve",
+            "write",
+            "cria",
+            "creat",
+            "story",
+            "história",
+            "poem",
+            "poema",
+            "email",
+            "carta",
+            "letter",
+            "brainstorm",
+            "ideia",
+            "idea",
+            "slogan",
+            "tagline",
+            "name for",
         ],
         base_complexity: TaskComplexity::Moderate,
         confidence: 0.80,
@@ -96,8 +148,16 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Extraction,
         keywords: &[
-            "extrai", "extract", "parse", "json from", "tabela", "table from",
-            "list all", "find all", "pega em", "structured",
+            "extrai",
+            "extract",
+            "parse",
+            "json from",
+            "tabela",
+            "table from",
+            "list all",
+            "find all",
+            "pega em",
+            "structured",
         ],
         base_complexity: TaskComplexity::Simple,
         confidence: 0.80,
@@ -105,8 +165,17 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Reasoning,
         keywords: &[
-            "calcula", "calculat", "math", "equação", "equation", "solve",
-            "resolve", "proof", "prova", "logic", "lógica",
+            "calcula",
+            "calculat",
+            "math",
+            "equação",
+            "equation",
+            "solve",
+            "resolve",
+            "proof",
+            "prova",
+            "logic",
+            "lógica",
         ],
         base_complexity: TaskComplexity::Moderate,
         confidence: 0.85,
@@ -114,8 +183,17 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::Planning,
         keywords: &[
-            "planeia", "plan ", "schedul", "organiz", "roadmap", "timeline",
-            "step by step", "passo a passo", "how to", "como", "strategy",
+            "planeia",
+            "plan ",
+            "schedul",
+            "organiz",
+            "roadmap",
+            "timeline",
+            "step by step",
+            "passo a passo",
+            "how to",
+            "como",
+            "strategy",
             "estratégia",
         ],
         base_complexity: TaskComplexity::Complex,
@@ -124,9 +202,8 @@ const PATTERNS: &[IntentPattern] = &[
     IntentPattern {
         intent: TaskIntent::QuestionAnswering,
         keywords: &[
-            "o que é", "what is", "who is", "quem é", "when did", "quando",
-            "where is", "onde", "how many", "quantos", "define", "explain",
-            "explica",
+            "o que é", "what is", "who is", "quem é", "when did", "quando", "where is", "onde",
+            "how many", "quantos", "define", "explain", "explica",
         ],
         base_complexity: TaskComplexity::Trivial,
         confidence: 0.70,
@@ -154,8 +231,8 @@ impl TaskClassifier for RuleBasedClassifier {
 
             if matched_count > 0 {
                 // Boost confidence with more keyword matches
-                let confidence = (pattern.confidence + (matched_count as f64 - 1.0) * 0.05)
-                    .min(0.95);
+                let confidence =
+                    (pattern.confidence + (matched_count as f64 - 1.0) * 0.05).min(0.95);
 
                 if best_match.as_ref().is_none_or(|(_, c)| confidence > *c) {
                     best_match = Some((pattern, confidence));
@@ -213,9 +290,15 @@ impl TaskClassifier for RuleBasedClassifier {
 
 /// Simple language detection based on common words.
 fn detect_language(text: &str) -> Option<String> {
-    let pt_markers = ["é", "não", "está", "como", "para", "mais", "pode", "tem", "são", "uma"];
-    let en_markers = ["the", "is", "are", "this", "that", "with", "for", "and", "not", "can"];
-    let es_markers = ["está", "pero", "también", "puede", "tiene", "esto", "como", "más", "por"];
+    let pt_markers = [
+        "é", "não", "está", "como", "para", "mais", "pode", "tem", "são", "uma",
+    ];
+    let en_markers = [
+        "the", "is", "are", "this", "that", "with", "for", "and", "not", "can",
+    ];
+    let es_markers = [
+        "está", "pero", "también", "puede", "tiene", "esto", "como", "más", "por",
+    ];
 
     let pt_score: usize = pt_markers.iter().filter(|w| text.contains(*w)).count();
     let en_score: usize = en_markers.iter().filter(|w| text.contains(*w)).count();
@@ -242,7 +325,10 @@ mod tests {
     #[tokio::test]
     async fn test_summarization_detection() {
         let c = RuleBasedClassifier::new();
-        let r = c.classify("resume este artigo sobre redes", None).await.unwrap();
+        let r = c
+            .classify("resume este artigo sobre redes", None)
+            .await
+            .unwrap();
         assert_eq!(r.intent, TaskIntent::Summarization);
         assert!(r.confidence > 0.8);
     }
@@ -250,7 +336,10 @@ mod tests {
     #[tokio::test]
     async fn test_coding_detection() {
         let c = RuleBasedClassifier::new();
-        let r = c.classify("write a function to sort a list in rust", None).await.unwrap();
+        let r = c
+            .classify("write a function to sort a list in rust", None)
+            .await
+            .unwrap();
         assert_eq!(r.intent, TaskIntent::Coding);
     }
 

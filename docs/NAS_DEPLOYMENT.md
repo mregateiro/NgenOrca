@@ -8,6 +8,7 @@ Clients reach it over **WireGuard first**, then nginx forwards requests internal
 Important consequences of this setup:
 - **Do not port-forward** NgenOrca's port `18789` to the internet.
 - In the NAS compose file, NgenOrca uses `expose`, not `ports`, so it is reachable only from containers on the same Docker network.
+- The editable runtime config lives in a persistent Docker volume, so redeploying the image does not replace your settings.
 - **Telegram should stay in polling mode** for this setup. Do not configure a Telegram webhook unless you deliberately expose a public HTTPS endpoint.
 - Public-webhook channels such as WhatsApp or Teams need extra public ingress if you want inbound provider callbacks.
 
@@ -53,42 +54,45 @@ If the `proxy` Docker network does not already exist, create it once:
 docker network create proxy
 ```
 
-If nginx or Authelia use a different external Docker network name, replace `proxy` everywhere in this guide and in [docker-compose.nas.yml](docker-compose.nas.yml).
+If nginx or Authelia use a different external Docker network name, replace `proxy` everywhere in this guide and in [docker-compose.nas.yml](../docker-compose.nas.yml).
 
 ## Step 1: Clone and Configure
 
 ```bash
 # On your NAS, via SSH or terminal
-git clone https://github.com/ngenorca/ngenorca.git
+git clone https://github.com/mregateiro/NgenOrca.git ngenorca
 cd ngenorca
-
-# Create your secrets file
-cp .env.example .env
-nano .env
 ```
 
-Fill in your `.env`:
+For Docker/NAS deployments, the real editable config file is persisted at:
 
-```env
-# Your Anthropic key (or OpenAI, or leave blank for Ollama-only)
-ANTHROPIC_API_KEY=sk-ant-api03-...
+```text
+/var/lib/ngenorca/config/config.toml
+```
 
-# Model to use
-NGENORCA_MODEL=anthropic/claude-sonnet-4-20250514
+You will create it from the built-in `/config` page after the stack starts.
 
-# Telegram bot (optional)
-TELEGRAM_ENABLED=true
-TELEGRAM_BOT_TOKEN=7123456789:AAH...
+If you want to prepare the values you will paste there, start from something like this:
 
-# Discord bot (optional)
-DISCORD_ENABLED=false
-DISCORD_BOT_TOKEN=
+```toml
+[gateway]
+auth_mode = "TrustedProxy"
+
+[agent]
+model = "anthropic/claude-sonnet-4-20250514"
+
+[agent.providers.anthropic]
+api_key = "sk-ant-api03-..."
+
+[channels.telegram]
+enabled = true
+bot_token = "7123456789:AAH..."
+polling = true
 ```
 
 Notes:
-- Leave `OPENAI_API_KEY` blank unless you actually use OpenAI.
-- Leave `TELEGRAM_ENABLED=false` if you do not want Telegram.
 - For a NAT-only NAS setup, **do not add a Telegram webhook URL**. The NAS compose file already forces Telegram polling mode.
+- The NAS compose file bootstraps `TrustedProxy` via environment variables so the `/config` page is still protected by Authelia before `config.toml` exists.
 
 ## Step 2: nginx Configuration
 
@@ -148,7 +152,14 @@ docker restart authelia
 ## Step 4: Start NgenOrca
 
 ```bash
+# Run this from the cloned repo root (the folder that contains docker-compose.nas.yml)
 docker compose -f docker-compose.nas.yml up -d
+```
+
+Then open `https://ngenorca.nas.local/config`, paste your TOML config, click **Save config**, and restart NgenOrca:
+
+```bash
+docker compose -f docker-compose.nas.yml restart ngenorca
 ```
 
 Verify it's running:
@@ -175,7 +186,7 @@ From your phone or laptop (connected via WireGuard):
 1. Open `https://ngenorca.nas.local` in your browser
 2. Authelia should redirect you to `https://auth.nas.local`
 3. Log in with your credentials + 2FA
-4. You should see the NgenOrca root response or web UI, depending on your client/path
+4. You should see the NgenOrca response or the `/config` editor, depending on your path
 
 Check the `/api/v1/whoami` endpoint to verify identity passthrough:
 
@@ -202,29 +213,36 @@ Expected response:
 
 If you run Ollama on the NAS too:
 
-```env
-# .env
-NGENORCA_MODEL=ollama/llama3.1
-OLLAMA_URL=http://host.docker.internal:11434
+```toml
+[agent]
+model = "ollama/llama3.1"
+
+[agent.providers.ollama]
+base_url = "http://host.docker.internal:11434"
 ```
 
 Or if Ollama is also in Docker on the same network:
-```env
-OLLAMA_URL=http://ollama:11434
+```toml
+[agent]
+model = "ollama/llama3.1"
+
+[agent.providers.ollama]
+base_url = "http://ollama:11434"
 ```
 
 This gives you a **100% local, zero-cloud** setup. No API keys needed, no data leaves your network.
 
 ## Telegram via Polling (No Public URL)
 
-Since your NAS is behind WireGuard with no public IP, use polling mode:
+Since your NAS is behind WireGuard with no public IP, keep Telegram in polling mode inside `config.toml`:
 
-```env
-TELEGRAM_ENABLED=true
-TELEGRAM_BOT_TOKEN=7123456789:AAHk...
+```toml
+[channels.telegram]
+enabled = true
+bot_token = "7123456789:AAHk..."
+polling = true
 ```
 
-The NAS compose file already sets `NGENORCA_CHANNELS__TELEGRAM__POLLING=true`.
 NgenOrca connects outbound to Telegram's servers — no inbound webhook needed.
 
 For this NAT/WireGuard setup:
@@ -239,9 +257,6 @@ If you later move to a public HTTPS deployment, you can switch Telegram to webho
 ```
 /path/to/ngenorca/
 ├── docker-compose.nas.yml      # NAS-specific compose
-├── .env                        # Your secrets (git-ignored)
-├── config/
-│   └── config.example.toml     # Reference — env vars override everything
 ├── deploy/
 │   └── nginx/
 │       └── ngenorca.conf       # nginx site config with Authelia
@@ -253,6 +268,9 @@ Docker volumes:
 ngenorca-data → /var/lib/ngenorca/
   ├── events.db                 # Event bus (durable log)
   ├── identity.db               # User identities & device bindings
+  ├── config/
+  │   ├── config.toml           # Saved by the built-in /config editor
+  │   └── config.backup-*.toml  # Automatic backups before overwrite
   └── memory/
       ├── episodic.db           # Conversation history
       └── semantic.db           # Distilled facts & knowledge
@@ -265,7 +283,7 @@ ngenorca-data → /var/lib/ngenorca/
 | Network access | WireGuard VPN — only your devices can reach the NAS |
 | Authentication | Authelia — 2FA before any request reaches NgenOrca |
 | Identity | Remote-User header — NgenOrca knows who's talking |
-| API keys | Environment variables — never written to disk, never in config files |
+| Runtime config | Persistent Docker volume — redeploying the image does not replace `config.toml` |
 | Data at rest | SQLite on NAS filesystem — encrypted if your NAS has disk encryption |
 | LLM traffic | HTTPS to provider APIs (Anthropic/OpenAI) |
 | Tool execution | Container sandbox — Docker's own cgroups/namespaces |
@@ -301,6 +319,12 @@ docker compose -f docker-compose.nas.yml up -d --build
 - Port mismatch: check `expose: ["18789"]` in compose and `proxy_pass http://ngenorca:18789` in nginx
 - Upstream name mismatch: your nginx config uses `ngenorca` and `authelia` as upstream names; rename them in the config if your container names differ
 
+### Config changes do not survive a redeploy
+- Make sure the `ngenorca-config` volume still exists: `docker volume inspect ngenorca-config`
+- Save changes through `/config`, not by editing files inside the running container image
+- Restart after each save: `docker compose -f docker-compose.nas.yml restart ngenorca`
+- If you later add `NGENORCA_*` variables to the compose file, those values override the persisted TOML until you remove them
+
 ### "401 Unauthorized" from NgenOrca
 - Auth mode mismatch: NgenOrca expects `TrustedProxy` but nginx isn't sending headers
 - Header name mismatch: check `proxy_user_header` matches what nginx sends
@@ -311,7 +335,7 @@ docker compose -f docker-compose.nas.yml up -d --build
 - `auth.nas.local` must also resolve on the client device, not just `ngenorca.nas.local`
 
 ### Telegram bot not responding
-- Check `TELEGRAM_ENABLED=true` and `TELEGRAM_BOT_TOKEN` in `.env`
+- Check that `[channels.telegram]` is enabled in `/config`
 - View logs: `docker logs ngenorca | grep -i telegram`
 - Verify token: `curl https://api.telegram.org/bot<YOUR_TOKEN>/getMe`
 - For NAS/NAT mode, make sure you did **not** try to configure a Telegram webhook; polling is the intended setup here
