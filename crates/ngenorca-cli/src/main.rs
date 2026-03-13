@@ -98,7 +98,9 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Gateway { port, bind } => {
-            let mut config = ngenorca_config::load_config(cli.config.as_deref())?;
+            let config_path = ngenorca_config::resolve_config_path(cli.config.as_deref());
+            let config_path_str = config_path.to_string_lossy().into_owned();
+            let mut config = ngenorca_config::load_config(Some(&config_path_str))?;
 
             // Initialize logging with config settings (overrideable by --verbose).
             let log_level = if cli.verbose {
@@ -132,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             print_banner();
-            ngenorca_gateway::start(config).await?;
+            ngenorca_gateway::start(config, config_path).await?;
         }
 
         Commands::Status => {
@@ -206,9 +208,26 @@ async fn main() -> anyhow::Result<()> {
 
                 let caps = ngenorca_identity::fingerprint::detect_capabilities();
                 println!("Hardware capabilities:");
-                println!("  TPM:            {}", if caps.tpm_available { "✓" } else { "✗" });
-                println!("  Secure Enclave: {}", if caps.secure_enclave_available { "✓" } else { "✗" });
-                println!("  StrongBox:      {}", if caps.strongbox_available { "✓" } else { "✗" });
+                println!(
+                    "  TPM:            {}",
+                    if caps.tpm_available { "✓" } else { "✗" }
+                );
+                println!(
+                    "  Secure Enclave: {}",
+                    if caps.secure_enclave_available {
+                        "✓"
+                    } else {
+                        "✗"
+                    }
+                );
+                println!(
+                    "  StrongBox:      {}",
+                    if caps.strongbox_available {
+                        "✓"
+                    } else {
+                        "✗"
+                    }
+                );
                 println!();
 
                 // Generate device fingerprint.
@@ -252,7 +271,10 @@ async fn main() -> anyhow::Result<()> {
 
                 manager.pair_device(&user_id, device)?;
                 println!();
-                println!("✓ Device '{}' ({}) paired to user '{}'", device_name, device_id.0, user_id.0);
+                println!(
+                    "✓ Device '{}' ({}) paired to user '{}'",
+                    device_name, device_id.0, user_id.0
+                );
             }
             IdentityAction::Revoke { device_id } => {
                 let config = ngenorca_config::load_config(cli.config.as_deref())?;
@@ -270,7 +292,10 @@ async fn main() -> anyhow::Result<()> {
                     if user.devices.iter().any(|d| d.device_id.0 == device_id) {
                         let did = ngenorca_core::types::DeviceId(device_id.clone());
                         manager.revoke_device(&user.user_id, &did)?;
-                        println!("✓ Device '{}' revoked from user '{}'", device_id, user.user_id.0);
+                        println!(
+                            "✓ Device '{}' revoked from user '{}'",
+                            device_id, user.user_id.0
+                        );
                         revoked = true;
                         break;
                     }
@@ -429,9 +454,7 @@ fn run_onboard_wizard(config_path: Option<&str>) -> anyhow::Result<()> {
     // ── Generate config ─────────────────────────────────────────
     let config_dir = config_path
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs_home().join(".ngenorca").join("config.toml")
-        });
+        .unwrap_or_else(|| dirs_home().join(".ngenorca").join("config.toml"));
     let config_dir_parent = config_dir.parent().unwrap_or(std::path::Path::new("."));
     std::fs::create_dir_all(config_dir_parent)?;
 

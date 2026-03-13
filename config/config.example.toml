@@ -1,6 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║  NgenOrca Configuration                                        ║
 # ║  Place at: ~/.ngenorca/config.toml                              ║
+# ║  Docker:   /var/lib/ngenorca/config/config.toml                 ║
 # ║  Env vars: NGENORCA_SECTION__FIELD=value (double underscore)    ║
 # ║  Guide:    docs/CONFIGURATION_GUIDE.md                          ║
 # ╚══════════════════════════════════════════════════════════════════╝

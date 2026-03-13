@@ -39,11 +39,13 @@ impl WorkingMemory {
     /// Add a message to a session's working memory.
     pub fn push(&self, session_id: &SessionId, message: WorkingMessage) {
         let mut sessions = self.sessions.write().unwrap();
-        let ctx = sessions.entry(session_id.clone()).or_insert(SessionContext {
-            messages: Vec::new(),
-            total_tokens: 0,
-            max_tokens: 128_000, // Default context window
-        });
+        let ctx = sessions
+            .entry(session_id.clone())
+            .or_insert(SessionContext {
+                messages: Vec::new(),
+                total_tokens: 0,
+                max_tokens: 128_000, // Default context window
+            });
 
         ctx.total_tokens += message.estimated_tokens;
         ctx.messages.push(message);

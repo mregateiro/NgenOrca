@@ -15,15 +15,15 @@
 
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, error, info, warn};
 
 use hmac::{Hmac, Mac};
@@ -152,10 +152,7 @@ impl SlackAdapter {
         Some(Message {
             id: EventId::new(),
             timestamp: chrono::Utc::now(),
-            user_id: event
-                .user
-                .as_ref()
-                .map(|u| UserId(format!("slack:{u}"))),
+            user_id: event.user.as_ref().map(|u| UserId(format!("slack:{u}"))),
             trust: TrustLevel::Channel,
             session_id: SessionId::new(),
             channel: ChannelId(channel_id.to_string()),
@@ -314,10 +311,16 @@ impl ChannelAdapter for SlackAdapter {
                             {
                                 Ok(Some(Ok(msg))) => {
                                     let text = match msg {
-                                        tokio_tungstenite::tungstenite::Message::Text(t) => t.to_string(),
+                                        tokio_tungstenite::tungstenite::Message::Text(t) => {
+                                            t.to_string()
+                                        }
                                         tokio_tungstenite::tungstenite::Message::Ping(d) => {
                                             let _ = write
-                                                .send(tokio_tungstenite::tungstenite::Message::Pong(d))
+                                                .send(
+                                                    tokio_tungstenite::tungstenite::Message::Pong(
+                                                        d,
+                                                    ),
+                                                )
                                                 .await;
                                             continue;
                                         }
@@ -336,52 +339,47 @@ impl ChannelAdapter for SlackAdapter {
                                         let ack =
                                             serde_json::json!({"envelope_id": eid}).to_string();
                                         let _ = write
-                                            .send(tokio_tungstenite::tungstenite::Message::Text(ack.into()))
+                                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                                ack.into(),
+                                            ))
                                             .await;
                                     }
 
                                     // Process events_api envelopes.
                                     if envelope["type"].as_str() == Some("events_api")
-                                        && let Some(inner) = envelope["payload"]["event"].as_object()
-                                            && inner.get("type").and_then(|v| v.as_str())
-                                                == Some("message")
+                                        && let Some(inner) =
+                                            envelope["payload"]["event"].as_object()
+                                        && inner.get("type").and_then(|v| v.as_str())
+                                            == Some("message")
+                                    {
+                                        let evt: std::result::Result<SlackMessageEvent, _> =
+                                            serde_json::from_value(serde_json::Value::Object(
+                                                inner.clone(),
+                                            ));
+                                        if let Ok(slack_evt) = evt {
+                                            let ch = inner
+                                                .get("channel")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            if let Some(ngen_msg) =
+                                                SlackAdapter::slack_event_to_message(&slack_evt, ch)
                                             {
-                                                let evt: std::result::Result<
-                                                    SlackMessageEvent,
-                                                    _,
-                                                > = serde_json::from_value(
-                                                    serde_json::Value::Object(inner.clone()),
-                                                );
-                                                if let Ok(slack_evt) = evt {
-                                                    let ch = inner
-                                                        .get("channel")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("unknown");
-                                                    if let Some(ngen_msg) =
-                                                        SlackAdapter::slack_event_to_message(
-                                                            &slack_evt, ch,
-                                                        )
-                                                    {
-                                                        let event = Event {
-                                                            id: EventId::new(),
-                                                            timestamp: chrono::Utc::now(),
-                                                            session_id: Some(
-                                                                ngen_msg.session_id.clone(),
-                                                            ),
-                                                            user_id: ngen_msg.user_id.clone(),
-                                                            payload: EventPayload::Message(
-                                                                ngen_msg,
-                                                            ),
-                                                        };
-                                                        if let Err(e) = sender.send(event) {
-                                                            error!(
-                                                                error = %e,
-                                                                "Failed to send Slack event to bus"
-                                                            );
-                                                        }
-                                                    }
+                                                let event = Event {
+                                                    id: EventId::new(),
+                                                    timestamp: chrono::Utc::now(),
+                                                    session_id: Some(ngen_msg.session_id.clone()),
+                                                    user_id: ngen_msg.user_id.clone(),
+                                                    payload: EventPayload::Message(ngen_msg),
+                                                };
+                                                if let Err(e) = sender.send(event) {
+                                                    error!(
+                                                        error = %e,
+                                                        "Failed to send Slack event to bus"
+                                                    );
                                                 }
                                             }
+                                        }
+                                    }
                                     // Handle disconnect advisory.
                                     if envelope["type"].as_str() == Some("disconnect") {
                                         warn!("Slack sent disconnect advisory — reconnecting");
@@ -419,9 +417,10 @@ impl ChannelAdapter for SlackAdapter {
                         .await;
                     if let Ok(r) = resp
                         && let Ok(body) = r.json::<serde_json::Value>().await
-                            && let Some(url) = body["url"].as_str() {
-                                current_url = url.to_string();
-                            }
+                        && let Some(url) = body["url"].as_str()
+                    {
+                        current_url = url.to_string();
+                    }
                 }
             }
 
@@ -464,7 +463,12 @@ mod tests {
     use super::*;
 
     fn make_adapter() -> SlackAdapter {
-        SlackAdapter::new("xoxb-test-token".into(), Some("xapp-test".into()), true, None)
+        SlackAdapter::new(
+            "xoxb-test-token".into(),
+            Some("xapp-test".into()),
+            true,
+            None,
+        )
     }
 
     #[test]
@@ -524,4 +528,3 @@ mod tests {
         assert!(SlackAdapter::slack_event_to_message(&evt, "C1").is_none());
     }
 }
-

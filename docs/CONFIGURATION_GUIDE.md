@@ -322,6 +322,8 @@ bot_token = "7123456789:AAH..."               # From @BotFather
 
 > **Tip:** Use `polling = true` for local development (no public URL needed). Switch to webhook mode for production.
 
+> **NAT / homelab note:** If your server is only reachable over WireGuard, Tailscale, or a private LAN and does not have a public HTTPS URL, keep `polling = true` and leave `webhook_url` unset.
+
 ---
 
 ### Discord

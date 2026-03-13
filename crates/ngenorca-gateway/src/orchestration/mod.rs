@@ -8,10 +8,10 @@
 
 pub mod classifier;
 pub mod learned;
-pub mod quality;
 pub mod orchestrator;
+pub mod quality;
 
 pub use classifier::RuleBasedClassifier;
 pub use learned::LearnedRouter;
-pub use quality::HeuristicQualityGate;
 pub use orchestrator::HybridOrchestrator;
+pub use quality::HeuristicQualityGate;

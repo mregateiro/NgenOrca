@@ -9,15 +9,15 @@
 //! internal `Message` type, handling user identification via Telegram user IDs.
 
 use async_trait::async_trait;
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use tracing::{debug, error, info, warn};
 
 use subtle::ConstantTimeEq;
@@ -99,10 +99,7 @@ impl TelegramAdapter {
             return None;
         }
 
-        let user_display = user
-            .username
-            .as_deref()
-            .unwrap_or(&user.first_name);
+        let user_display = user.username.as_deref().unwrap_or(&user.first_name);
 
         Some(Message {
             id: EventId::new(),
@@ -221,10 +218,7 @@ impl Plugin for TelegramAdapter {
         Ok(())
     }
 
-    async fn handle_message(
-        &self,
-        message: &Message,
-    ) -> ngenorca_core::Result<Option<Message>> {
+    async fn handle_message(&self, message: &Message) -> ngenorca_core::Result<Option<Message>> {
         // Outbound: send response back to Telegram.
         if message.direction == Direction::Outbound {
             let chat_id: i64 = message
@@ -256,7 +250,9 @@ impl Plugin for TelegramAdapter {
             .get(self.api_url("getMe"))
             .send()
             .await
-            .map_err(|e| ngenorca_core::Error::Other(format!("Telegram health check failed: {e}")))?;
+            .map_err(|e| {
+                ngenorca_core::Error::Other(format!("Telegram health check failed: {e}"))
+            })?;
 
         if resp.status().is_success() {
             Ok(())
@@ -332,34 +328,33 @@ impl ChannelAdapter for TelegramAdapter {
                 });
 
                 let result = client
-                    .post(format!(
-                        "{}/bot{}/getUpdates",
-                        TELEGRAM_API_BASE, token
-                    ))
+                    .post(format!("{}/bot{}/getUpdates", TELEGRAM_API_BASE, token))
                     .json(&body)
                     .send()
                     .await;
 
                 match result {
                     Ok(resp) => {
-                        match resp.json::<TelegramApiResponse<Vec<TelegramUpdate>>>().await {
+                        match resp
+                            .json::<TelegramApiResponse<Vec<TelegramUpdate>>>()
+                            .await
+                        {
                             Ok(api_resp) if api_resp.ok => {
                                 for update in api_resp.result.unwrap_or_default() {
-                                    last_update_id
-                                        .store(update.update_id, Ordering::SeqCst);
+                                    last_update_id.store(update.update_id, Ordering::SeqCst);
 
                                     if let Some(msg) = &update.message {
                                         // Check user permission.
                                         if let Some(user) = &msg.from
                                             && !allowed_users.is_empty()
-                                                && !allowed_users.contains(&user.id)
-                                            {
-                                                debug!(
-                                                    user_id = user.id,
-                                                    "Telegram: ignoring message from unauthorized user"
-                                                );
-                                                continue;
-                                            }
+                                            && !allowed_users.contains(&user.id)
+                                        {
+                                            debug!(
+                                                user_id = user.id,
+                                                "Telegram: ignoring message from unauthorized user"
+                                            );
+                                            continue;
+                                        }
 
                                         if let Some(ngen_msg) =
                                             TelegramAdapter::telegram_message_to_ngenorca(msg)

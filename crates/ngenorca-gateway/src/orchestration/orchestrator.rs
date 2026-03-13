@@ -10,12 +10,11 @@
 //! 7. Record the result for learning
 
 use ngenorca_config::{NgenOrcaConfig, RoutingStrategy, SubAgentConfig};
-use ngenorca_core::orchestration::{
-    ClassificationMethod, OrchestrationRecord, QualityMethod,
-    QualityVerdict, RoutingDecision, SubAgentId, TaskClassification,
-    TaskComplexity, TaskIntent,
-};
 use ngenorca_core::Result;
+use ngenorca_core::orchestration::{
+    ClassificationMethod, OrchestrationRecord, QualityMethod, QualityVerdict, RoutingDecision,
+    SubAgentId, TaskClassification, TaskComplexity, TaskIntent,
+};
 use ngenorca_plugin_sdk::{
     ChatCompletionRequest, ChatCompletionResponse, ChatMessage, OrchestratedResponse,
     ToolDefinition, Usage,
@@ -80,9 +79,7 @@ impl HybridOrchestrator {
             .map(|c| c.confidence_threshold)
             .unwrap_or(0.8);
 
-        if classification.confidence >= threshold
-            && classification.intent != TaskIntent::Unknown
-        {
+        if classification.confidence >= threshold && classification.intent != TaskIntent::Unknown {
             debug!(
                 intent = ?classification.intent,
                 confidence = classification.confidence,
@@ -92,9 +89,7 @@ impl HybridOrchestrator {
         }
 
         // Level 2: SLM classifier (if configured and provider available)
-        if let (Some(classifier_cfg), Some(registry)) =
-            (&self.config.agent.classifier, registry)
-        {
+        if let (Some(classifier_cfg), Some(registry)) = (&self.config.agent.classifier, registry) {
             debug!(
                 rule_confidence = classification.confidence,
                 "Rule-based confidence too low, invoking SLM classifier"
@@ -172,10 +167,7 @@ impl HybridOrchestrator {
     }
 
     /// Route a classified task to the best sub-agent.
-    pub fn route(
-        &self,
-        classification: &TaskClassification,
-    ) -> RoutingDecision {
+    pub fn route(&self, classification: &TaskClassification) -> RoutingDecision {
         let sub_agents = &self.config.agent.sub_agents;
 
         // If no sub-agents configured, route to primary
@@ -185,18 +177,12 @@ impl HybridOrchestrator {
 
         // Try to find a matching sub-agent based on strategy
         match &self.config.agent.routing {
-            RoutingStrategy::Single => {
-                self.route_to_primary(classification, "Single routing mode")
-            }
+            RoutingStrategy::Single => self.route_to_primary(classification, "Single routing mode"),
             RoutingStrategy::RuleBased | RoutingStrategy::Hybrid => {
                 self.route_by_role(classification, sub_agents)
             }
-            RoutingStrategy::LocalFirst => {
-                self.route_local_first(classification, sub_agents)
-            }
-            RoutingStrategy::CostOptimized => {
-                self.route_cheapest(classification, sub_agents)
-            }
+            RoutingStrategy::LocalFirst => self.route_local_first(classification, sub_agents),
+            RoutingStrategy::CostOptimized => self.route_cheapest(classification, sub_agents),
             RoutingStrategy::LlmRouted => {
                 // LLM routing would require an actual LLM call to decide.
                 // For now, fall back to role-based routing.
@@ -232,29 +218,42 @@ impl HybridOrchestrator {
         match method {
             "llm" | "slm" => {
                 // Use LLM-based quality evaluation
-                let model = self.config.agent.classifier.as_ref()
+                let model = self
+                    .config
+                    .agent
+                    .classifier
+                    .as_ref()
                     .map(|c| c.model.clone())
                     .unwrap_or_else(|| self.config.agent.model.clone());
                 let llm_gate = super::quality::LlmQualityGate::new(model);
-                llm_gate.evaluate_with_provider(task, response, original_message, registry).await
+                llm_gate
+                    .evaluate_with_provider(task, response, original_message, registry)
+                    .await
             }
             "auto" => {
                 // Heuristic first; if borderline (score 0.5–0.7), use LLM
-                let (verdict, heur_method) = self.quality_gate
+                let (verdict, heur_method) = self
+                    .quality_gate
                     .evaluate(task, response, original_message)
                     .await?;
 
                 if let QualityVerdict::Accept { score: Some(s) } = &verdict
-                    && *s >= 0.5 && *s < 0.7 {
-                        // Borderline — get a second opinion from LLM
-                        let model = self.config.agent.classifier.as_ref()
-                            .map(|c| c.model.clone())
-                            .unwrap_or_else(|| self.config.agent.model.clone());
-                        let llm_gate = super::quality::LlmQualityGate::new(model);
-                        return llm_gate
-                            .evaluate_with_provider(task, response, original_message, registry)
-                            .await;
-                    }
+                    && *s >= 0.5
+                    && *s < 0.7
+                {
+                    // Borderline — get a second opinion from LLM
+                    let model = self
+                        .config
+                        .agent
+                        .classifier
+                        .as_ref()
+                        .map(|c| c.model.clone())
+                        .unwrap_or_else(|| self.config.agent.model.clone());
+                    let llm_gate = super::quality::LlmQualityGate::new(model);
+                    return llm_gate
+                        .evaluate_with_provider(task, response, original_message, registry)
+                        .await;
+                }
                 Ok((verdict, heur_method))
             }
             _ => {
@@ -267,10 +266,7 @@ impl HybridOrchestrator {
     }
 
     /// Find the sub-agent to escalate to (more capable than the current one).
-    pub fn find_escalation_target(
-        &self,
-        current_agent: &str,
-    ) -> Option<SubAgentId> {
+    pub fn find_escalation_target(&self, current_agent: &str) -> Option<SubAgentId> {
         let current = self.config.sub_agent(current_agent);
         let current_cost = current.map(|a| a.cost_weight).unwrap_or(0);
 
@@ -315,7 +311,8 @@ impl HybridOrchestrator {
         // Add task-specific instructions
         match &classification.intent {
             TaskIntent::Summarization => {
-                prompt.push_str("You are summarizing content. Be concise and capture key points.\n");
+                prompt
+                    .push_str("You are summarizing content. Be concise and capture key points.\n");
             }
             TaskIntent::Translation => {
                 prompt.push_str("You are translating text. Preserve meaning and tone.\n");
@@ -333,7 +330,8 @@ impl HybridOrchestrator {
                 prompt.push_str("You are extracting structured data. Be precise and complete.\n");
             }
             TaskIntent::Reasoning => {
-                prompt.push_str("You are solving a logical/mathematical problem. Show your work.\n");
+                prompt
+                    .push_str("You are solving a logical/mathematical problem. Show your work.\n");
             }
             TaskIntent::Planning => {
                 prompt.push_str("You are creating a plan. Be structured with clear steps.\n");
@@ -442,7 +440,10 @@ impl HybridOrchestrator {
             QualityVerdict::Accept { score } => {
                 debug!(score = ?score, "Quality gate: accepted");
             }
-            QualityVerdict::Escalate { reason, escalate_to } => {
+            QualityVerdict::Escalate {
+                reason,
+                escalate_to,
+            } => {
                 warn!(
                     reason = %reason,
                     escalate_to = ?escalate_to,
@@ -451,14 +452,9 @@ impl HybridOrchestrator {
                 escalated = true;
 
                 // Find escalation target
-                if let Some(escalation_target) =
-                    self.find_escalation_target(&routing.target.name)
-                {
+                if let Some(escalation_target) = self.find_escalation_target(&routing.target.name) {
                     // Re-send to a more capable model
-                    let esc_agent = self
-                        .config
-                        .sub_agent(&escalation_target.name)
-                        .cloned();
+                    let esc_agent = self.config.sub_agent(&escalation_target.name).cloned();
 
                     let esc_system_prompt = if let Some(ref agent) = esc_agent {
                         self.generate_system_prompt(
@@ -499,7 +495,10 @@ impl HybridOrchestrator {
                     }
                 }
             }
-            QualityVerdict::Augment { missing, partial_response } => {
+            QualityVerdict::Augment {
+                missing,
+                partial_response,
+            } => {
                 debug!(
                     missing = %missing,
                     "Quality gate: augmenting response"
@@ -571,17 +570,20 @@ impl HybridOrchestrator {
             .content
             .unwrap_or_else(|| "[No response content]".into());
 
-        Ok((OrchestratedResponse {
-            content,
-            tool_calls: final_response.tool_calls,
-            served_by,
-            classification,
-            routing,
-            quality: verdict,
-            escalated,
-            total_usage,
-            latency_ms,
-        }, record))
+        Ok((
+            OrchestratedResponse {
+                content,
+                tool_calls: final_response.tool_calls,
+                served_by,
+                classification,
+                routing,
+                quality: verdict,
+                escalated,
+                total_usage,
+                latency_ms,
+            },
+            record,
+        ))
     }
 
     /// Build the message array for a chat completion request.
@@ -649,10 +651,7 @@ impl HybridOrchestrator {
                 // Append tool result as a "tool" role message.
                 request.messages.push(ChatMessage {
                     role: "tool".into(),
-                    content: format!(
-                        "[Tool: {} (call_id: {})]\n{}",
-                        tc.name, tc.id, result
-                    ),
+                    content: format!("[Tool: {} (call_id: {})]\n{}", tc.name, tc.id, result),
                 });
             }
 
@@ -685,9 +684,7 @@ impl HybridOrchestrator {
                 .sub_agents
                 .first()
                 .and_then(|a| a.system_prompt.clone())
-                .unwrap_or_else(|| {
-                    "You are NgenOrca, a helpful personal AI assistant.".to_string()
-                })
+                .unwrap_or_else(|| "You are NgenOrca, a helpful personal AI assistant.".to_string())
         } else {
             system_prompt.to_string()
         };
@@ -842,7 +839,10 @@ impl HybridOrchestrator {
                 intent = intent_str,
                 "No sub-agent matches role, routing to primary"
             );
-            self.route_to_primary(classification, &format!("No sub-agent for role: {}", intent_str))
+            self.route_to_primary(
+                classification,
+                &format!("No sub-agent for role: {}", intent_str),
+            )
         }
     }
 
@@ -882,7 +882,10 @@ impl HybridOrchestrator {
                     name: agent.name.clone(),
                     model: agent.model.clone(),
                 },
-                reason: format!("LocalFirst: {} (local, priority {})", agent.name, agent.priority),
+                reason: format!(
+                    "LocalFirst: {} (local, priority {})",
+                    agent.name, agent.priority
+                ),
                 system_prompt,
                 temperature: Some(agent.temperature),
                 max_tokens: Some(agent.max_tokens),
@@ -1051,8 +1054,8 @@ fn parse_slm_classification(raw: &str) -> Option<TaskClassification> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngenorca_core::orchestration::ClassificationMethod;
     use ngenorca_config::SubAgentConfig;
+    use ngenorca_core::orchestration::ClassificationMethod;
 
     fn test_config() -> NgenOrcaConfig {
         let mut config = NgenOrcaConfig::default();
@@ -1113,7 +1116,10 @@ mod tests {
         let config = Arc::new(test_config());
         let orch = HybridOrchestrator::new(config);
 
-        let result = orch.classify("resume este artigo sobre redes", None).await.unwrap();
+        let result = orch
+            .classify("resume este artigo sobre redes", None)
+            .await
+            .unwrap();
         assert_eq!(result.intent, TaskIntent::Summarization);
     }
 

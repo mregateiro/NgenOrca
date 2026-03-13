@@ -2,6 +2,7 @@
     "chat.tools.terminal.autoApprove": {
         "git commit": true,
         "git push": true,
-        "cargo check": true
+        "cargo check": true,
+        "git -C .": true
     }
 }

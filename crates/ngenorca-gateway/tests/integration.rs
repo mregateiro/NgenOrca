@@ -16,8 +16,8 @@ use ngenorca_gateway::plugins::PluginRegistry;
 use ngenorca_gateway::providers::ProviderRegistry;
 use ngenorca_gateway::rate_limit::RateLimiterState;
 use ngenorca_gateway::routes;
-use ngenorca_gateway::state::{AppState, AppStateParams};
 use ngenorca_gateway::sessions::SessionManager;
+use ngenorca_gateway::state::{AppState, AppStateParams};
 use ngenorca_identity::IdentityManager;
 use ngenorca_memory::MemoryManager;
 use serde_json::Value;
@@ -34,23 +34,20 @@ async fn test_state() -> AppState {
     let event_bus = EventBus::new(":memory:").await.unwrap();
     let identity = IdentityManager::new(":memory:").unwrap();
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_dir = std::env::temp_dir().join(format!(
-        "ngenorca_integ_{}_{unique}",
-        std::process::id(),
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("ngenorca_integ_{}_{unique}", std::process::id(),));
     std::fs::create_dir_all(&temp_dir).unwrap();
+    let config_file_path = temp_dir.join("config.toml");
     let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
     let providers = ProviderRegistry::from_config(&config);
-    let sessions = SessionManager::new(
-        config.agent.model.clone(),
-        config.agent.thinking_level,
-    );
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
     let learned_router = LearnedRouter::new(":memory:").unwrap();
     let metrics = Metrics::new();
     AppState::new(AppStateParams {
         config,
+        config_file_path,
         event_bus,
         identity,
         memory,
@@ -99,7 +96,9 @@ async fn health_returns_200_without_auth() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "healthy");
 }
@@ -117,7 +116,9 @@ async fn version_returns_crate_version() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert!(json["version"].is_string());
     // Must not be empty.
@@ -129,17 +130,106 @@ async fn version_returns_crate_version() {
 #[tokio::test]
 async fn root_returns_name_and_endpoints() {
     let app = build_app(test_state().await);
+    let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "NgenOrca");
+    assert!(json["endpoints"].is_object());
+}
+
+#[tokio::test]
+async fn config_page_returns_html() {
+    let app = build_app(test_state().await);
     let req = Request::builder()
-        .uri("/")
+        .uri("/config")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with("text/html"))
+    );
+}
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["name"], "NgenOrca");
-    assert!(json["endpoints"].is_object());
+#[tokio::test]
+async fn config_file_endpoint_reads_and_writes_persisted_config() {
+    let config = NgenOrcaConfig::default();
+    let event_bus = EventBus::new(":memory:").await.unwrap();
+    let identity = IdentityManager::new(":memory:").unwrap();
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "ngenorca_integ_config_ui_{}_{unique}",
+        std::process::id(),
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let config_file_path = temp_dir.join("config.toml");
+    let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
+    let providers = ProviderRegistry::from_config(&config);
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
+    let learned_router = LearnedRouter::new(":memory:").unwrap();
+    let metrics = Metrics::new();
+    let state = AppState::new(AppStateParams {
+        config,
+        config_file_path: config_file_path.clone(),
+        event_bus,
+        identity,
+        memory,
+        providers,
+        sessions,
+        plugins,
+        learned_router,
+        metrics,
+    });
+
+    let app = build_app(state.clone());
+
+    let load_req = Request::builder()
+        .uri("/api/v1/config/file")
+        .body(Body::empty())
+        .unwrap();
+    let load_resp = app.clone().oneshot(load_req).await.unwrap();
+    assert_eq!(load_resp.status(), StatusCode::OK);
+    let load_body = axum::body::to_bytes(load_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let load_json: Value = serde_json::from_slice(&load_body).unwrap();
+    assert_eq!(load_json["exists"], false);
+
+    let new_config = r#"
+[gateway]
+auth_mode = "None"
+
+[agent]
+model = "anthropic/claude-sonnet-4-20250514"
+
+[channels.webchat]
+enabled = true
+"#;
+
+    let save_req = Request::builder()
+        .method("PUT")
+        .uri("/api/v1/config/file")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "content": new_config }).to_string(),
+        ))
+        .unwrap();
+    let save_resp = app.oneshot(save_req).await.unwrap();
+    assert_eq!(save_resp.status(), StatusCode::OK);
+
+    let persisted = std::fs::read_to_string(&config_file_path).unwrap();
+    assert!(persisted.contains("[agent]"));
+    assert!(persisted.contains("anthropic/claude-sonnet-4-20250514"));
 }
 
 // ─── Request-ID propagation ─────────────────────────────────────────
@@ -153,7 +243,12 @@ async fn request_id_generated_when_absent() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert!(resp.headers().contains_key("x-request-id"));
-    let id = resp.headers().get("x-request-id").unwrap().to_str().unwrap();
+    let id = resp
+        .headers()
+        .get("x-request-id")
+        .unwrap()
+        .to_str()
+        .unwrap();
     // UUIDv7 is 36 chars.
     assert_eq!(id.len(), 36);
 }
@@ -168,7 +263,12 @@ async fn request_id_propagated_from_client() {
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    let echo = resp.headers().get("x-request-id").unwrap().to_str().unwrap();
+    let echo = resp
+        .headers()
+        .get("x-request-id")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert_eq!(echo, custom_id);
 }
 
@@ -191,16 +291,14 @@ async fn token_auth_rejects_without_bearer() {
     std::fs::create_dir_all(&temp_dir).unwrap();
     let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
     let providers = ProviderRegistry::from_config(&config);
-    let sessions = SessionManager::new(
-        config.agent.model.clone(),
-        config.agent.thinking_level,
-    );
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
     let learned_router = LearnedRouter::new(":memory:").unwrap();
     let metrics = Metrics::new();
     let state = AppState::new(AppStateParams {
         config,
+        config_file_path: temp_dir.join("config.toml"),
         event_bus,
         identity,
         memory,
@@ -238,16 +336,14 @@ async fn token_auth_passes_with_valid_bearer() {
     std::fs::create_dir_all(&temp_dir).unwrap();
     let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
     let providers = ProviderRegistry::from_config(&config);
-    let sessions = SessionManager::new(
-        config.agent.model.clone(),
-        config.agent.thinking_level,
-    );
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
     let learned_router = LearnedRouter::new(":memory:").unwrap();
     let metrics = Metrics::new();
     let state = AppState::new(AppStateParams {
         config,
+        config_file_path: temp_dir.join("config.toml"),
         event_bus,
         identity,
         memory,
@@ -284,7 +380,9 @@ async fn chat_rejects_empty_message() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK); // returns 200 with error JSON
 
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert!(json["error"].as_str().unwrap().contains("empty"));
 }
@@ -304,16 +402,14 @@ async fn chat_rejects_oversized_message() {
     std::fs::create_dir_all(&temp_dir).unwrap();
     let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
     let providers = ProviderRegistry::from_config(&config);
-    let sessions = SessionManager::new(
-        config.agent.model.clone(),
-        config.agent.thinking_level,
-    );
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
     let learned_router = LearnedRouter::new(":memory:").unwrap();
     let metrics = Metrics::new();
     let state = AppState::new(AppStateParams {
         config,
+        config_file_path: temp_dir.join("config.toml"),
         event_bus,
         identity,
         memory,
@@ -335,7 +431,9 @@ async fn chat_rejects_oversized_message() {
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert!(json["error"].as_str().unwrap().contains("too long"));
 }
@@ -381,16 +479,14 @@ async fn state_with_config(config: NgenOrcaConfig) -> AppState {
     std::fs::create_dir_all(&temp_dir).unwrap();
     let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
     let providers = ProviderRegistry::from_config(&config);
-    let sessions = SessionManager::new(
-        config.agent.model.clone(),
-        config.agent.thinking_level,
-    );
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
     let learned_router = LearnedRouter::new(":memory:").unwrap();
     let metrics = Metrics::new();
     AppState::new(AppStateParams {
         config,
+        config_file_path: temp_dir.join("config.toml"),
         event_bus,
         identity,
         memory,
@@ -437,11 +533,11 @@ async fn trusted_proxy_rejects_untrusted_source_ip() {
         .header("Remote-User", "spoofed-user")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(
-        axum::extract::ConnectInfo(
-            "192.168.1.100:12345".parse::<std::net::SocketAddr>().unwrap()
-        )
-    );
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "192.168.1.100:12345"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
@@ -460,11 +556,9 @@ async fn trusted_proxy_accepts_trusted_source_ip() {
         .header("Remote-User", "legitimate-user")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(
-        axum::extract::ConnectInfo(
-            "10.0.0.1:54321".parse::<std::net::SocketAddr>().unwrap()
-        )
-    );
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "10.0.0.1:54321".parse::<std::net::SocketAddr>().unwrap(),
+    ));
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
@@ -483,11 +577,11 @@ async fn trusted_proxy_accepts_ip_within_cidr_range() {
         .header("Remote-User", "cidr-user")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(
-        axum::extract::ConnectInfo(
-            "192.168.1.100:9999".parse::<std::net::SocketAddr>().unwrap()
-        )
-    );
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "192.168.1.100:9999"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
@@ -506,11 +600,9 @@ async fn trusted_proxy_rejects_ip_outside_cidr_range() {
         .header("Remote-User", "outside-cidr")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(
-        axum::extract::ConnectInfo(
-            "192.168.1.1:9999".parse::<std::net::SocketAddr>().unwrap()
-        )
-    );
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "192.168.1.1:9999".parse::<std::net::SocketAddr>().unwrap(),
+    ));
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
@@ -623,7 +715,9 @@ async fn dsar_delete_rejects_cross_user_request() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "You may only delete your own data");
 }
@@ -699,7 +793,9 @@ fn base64_url_encode(input: &str) -> String {
 /// Spin up a real TCP server with the given config and return the bound address.
 /// The server runs in a background task and is cancelled when the returned
 /// `tokio::task::JoinHandle` is aborted.
-async fn start_test_server(config: NgenOrcaConfig) -> (std::net::SocketAddr, AppState, tokio::task::JoinHandle<()>) {
+async fn start_test_server(
+    config: NgenOrcaConfig,
+) -> (std::net::SocketAddr, AppState, tokio::task::JoinHandle<()>) {
     let state = state_with_config(config).await;
     let app = build_app(state.clone());
 
@@ -732,11 +828,15 @@ async fn ws_connect_with_auth(
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+        .header(
+            "Sec-WebSocket-Key",
+            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+        )
         .body(())
         .unwrap();
 
-    let (ws, _resp) = tokio_tungstenite::connect_async(request).await
+    let (ws, _resp) = tokio_tungstenite::connect_async(request)
+        .await
         .expect("WS handshake failed");
     ws
 }
@@ -746,14 +846,17 @@ async fn ws_connect_anonymous(
     addr: std::net::SocketAddr,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let url = format!("ws://{addr}/ws");
-    let (ws, _resp) = tokio_tungstenite::connect_async(&url).await
+    let (ws, _resp) = tokio_tungstenite::connect_async(&url)
+        .await
         .expect("WS handshake failed");
     ws
 }
 
 /// Helper: drain the "connected" welcome message from a freshly opened WS.
 async fn drain_welcome(
-    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
 ) {
     use futures::StreamExt;
     // The first message is always the welcome JSON.
@@ -763,20 +866,22 @@ async fn drain_welcome(
         .expect("stream ended")
         .expect("WS error");
     let text = msg.into_text().expect("expected text message");
-    assert!(text.contains("connected"), "expected welcome message, got: {text}");
+    assert!(
+        text.contains("connected"),
+        "expected welcome message, got: {text}"
+    );
 }
 
 /// Helper: try to receive a WS text message within a timeout.
 /// Returns `Some(text)` or `None` if the timeout elapses.
 async fn try_recv_ws(
-    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
     timeout_ms: u64,
 ) -> Option<String> {
     use futures::StreamExt;
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        ws.next(),
-    ).await {
+    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), ws.next()).await {
         Ok(Some(Ok(msg))) => msg.into_text().ok().map(|s| s.to_string()),
         _ => None,
     }
@@ -814,11 +919,18 @@ async fn ws_user_scoped_event_not_visible_to_other_user() {
     let alice_msg = try_recv_ws(&mut alice_ws, 2000).await;
     assert!(alice_msg.is_some(), "Alice should receive her own event");
     let alice_text = alice_msg.unwrap();
-    assert!(alice_text.contains("test-alice-v1"), "Alice got wrong event: {alice_text}");
+    assert!(
+        alice_text.contains("test-alice-v1"),
+        "Alice got wrong event: {alice_text}"
+    );
 
     // Bob should NOT receive Alice's event (give a generous timeout).
     let bob_msg = try_recv_ws(&mut bob_ws, 500).await;
-    assert!(bob_msg.is_none(), "Bob must NOT see Alice's event, but got: {:?}", bob_msg);
+    assert!(
+        bob_msg.is_none(),
+        "Bob must NOT see Alice's event, but got: {:?}",
+        bob_msg
+    );
 
     server_handle.abort();
 }
@@ -889,7 +1001,11 @@ async fn ws_anonymous_does_not_receive_user_scoped_events() {
 
     // Anonymous connection should NOT receive user-scoped event.
     let anon_msg = try_recv_ws(&mut anon_ws, 500).await;
-    assert!(anon_msg.is_none(), "Anonymous must NOT see user-scoped event, got: {:?}", anon_msg);
+    assert!(
+        anon_msg.is_none(),
+        "Anonymous must NOT see user-scoped event, got: {:?}",
+        anon_msg
+    );
 
     // But system events SHOULD reach anonymous connections.
     let sys_event = ngenorca_core::event::Event {

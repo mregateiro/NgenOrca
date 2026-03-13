@@ -10,6 +10,7 @@
 
 pub mod auth;
 pub mod channels;
+pub mod config_ui;
 pub mod metrics;
 pub mod orchestration;
 pub mod plugins;
@@ -32,7 +33,7 @@ use sessions::SessionManager;
 use tracing::info;
 
 /// Start the NgenOrca gateway.
-pub async fn start(config: NgenOrcaConfig) -> Result<()> {
+pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf) -> Result<()> {
     info!(
         bind = %config.gateway.bind,
         port = %config.gateway.port,
@@ -66,10 +67,7 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
     );
 
     // Initialize session manager.
-    let sessions = SessionManager::new(
-        config.agent.model.clone(),
-        config.agent.thinking_level,
-    );
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
 
     // Initialize plugin registry.
     // Create an mpsc channel that bridges plugin events → EventBus.
@@ -92,10 +90,10 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
     }
 
     // Initialize learned routing rules store.
+    std::fs::create_dir_all(&config.agent.workspace).ok();
     let learned_db_path = config.agent.workspace.join("learned_routes.db");
-    let learned_router = orchestration::LearnedRouter::new(
-        learned_db_path.to_str().unwrap_or("learned_routes.db"),
-    )?;
+    let learned_router =
+        orchestration::LearnedRouter::new(learned_db_path.to_str().unwrap_or("learned_routes.db"))?;
 
     // Initialize metrics registry.
     let metrics_registry = metrics::Metrics::new();
@@ -103,6 +101,7 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
     // Build shared application state.
     let app_state = state::AppState::new(state::AppStateParams {
         config: config.clone(),
+        config_file_path,
         event_bus,
         identity,
         memory,
@@ -127,9 +126,8 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
     // Spawn background memory consolidation task.
     {
         let state = app_state.clone();
-        let consolidation_interval = std::time::Duration::from_secs(
-            config.memory.consolidation_interval_secs,
-        );
+        let consolidation_interval =
+            std::time::Duration::from_secs(config.memory.consolidation_interval_secs);
         let max_episodes = config.memory.episodic_max_entries;
 
         tokio::spawn(async move {
@@ -140,8 +138,7 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
                 tracing::debug!("Running memory consolidation cycle");
 
                 // Get distinct user IDs from episodic memory
-                let users = state.memory().episodic.distinct_users()
-                    .unwrap_or_default();
+                let users = state.memory().episodic.distinct_users().unwrap_or_default();
 
                 for user_id in users {
                     let uid = ngenorca_core::types::UserId(user_id);
@@ -176,11 +173,14 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         let prune_interval = config.gateway.session_prune_interval_secs;
         let session_ttl = config.gateway.session_ttl_secs;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(prune_interval));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(prune_interval));
             interval.tick().await; // Skip immediate first tick
             loop {
                 interval.tick().await;
-                let pruned = state.sessions().prune_expired(std::time::Duration::from_secs(session_ttl));
+                let pruned = state
+                    .sessions()
+                    .prune_expired(std::time::Duration::from_secs(session_ttl));
                 if pruned > 0 {
                     tracing::debug!(pruned, "Session pruning cycle complete");
                 }
@@ -199,7 +199,8 @@ pub async fn start(config: NgenOrcaConfig) -> Result<()> {
         let prune_interval = config.gateway.event_log_prune_interval_secs;
         let retention_days = config.gateway.event_log_retention_days;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(prune_interval));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(prune_interval));
             interval.tick().await; // Skip immediate first tick
             loop {
                 interval.tick().await;

@@ -30,27 +30,24 @@ services:
     image: ghcr.io/ngenorca/ngenorca:latest
     # To build from source instead, comment out 'image' and uncomment:
     # build:
-    #   context: https://github.com/ngenorca/ngenorca.git
+    #   context: https://github.com/mregateiro/NgenOrca.git
     container_name: ngenorca
     restart: unless-stopped
+    command: ["ngenorca", "gateway", "--bind", "0.0.0.0", "--port", "18789", "--config", "/var/lib/ngenorca/config/config.toml"]
     ports:
       - "18789:18789"
     volumes:
       - ngenorca-data:/var/lib/ngenorca
-      - ngenorca-config:/etc/ngenorca
+      - ngenorca-config:/var/lib/ngenorca/config
     environment:
-      - NGENORCA_GATEWAY__BIND=0.0.0.0
-      - NGENORCA_GATEWAY__PORT=18789
-      # ── LLM Provider (pick one) ──
-      - NGENORCA_AGENT__MODEL=${NGENORCA_MODEL:-anthropic/claude-sonnet-4-20250514}
-      - NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY=${ANTHROPIC_API_KEY:-}
+      - NGENORCA_DATA_DIR=/var/lib/ngenorca/data
+      - NGENORCA_AGENT__WORKSPACE=/var/lib/ngenorca/workspace
+      # Optional bootstrap overrides. Leave these commented if you want the
+      # /config web UI to be the main source of truth.
+      # - NGENORCA_AGENT__MODEL=${NGENORCA_MODEL:-anthropic/claude-sonnet-4-20250514}
+      # - NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY=${ANTHROPIC_API_KEY:-}
       # - NGENORCA_AGENT__PROVIDERS__OPENAI__API_KEY=${OPENAI_API_KEY:-}
       # - NGENORCA_AGENT__PROVIDERS__OLLAMA__BASE_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      # ── Channels (optional) ──
-      # - NGENORCA_CHANNELS__TELEGRAM__ENABLED=true
-      # - NGENORCA_CHANNELS__TELEGRAM__BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      # - NGENORCA_CHANNELS__DISCORD__ENABLED=true
-      # - NGENORCA_CHANNELS__DISCORD__BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:18789/health"]
       interval: 30s
@@ -88,7 +85,7 @@ Scroll down to the **Environment variables** section (below the editor). Click *
 | `TELEGRAM_BOT_TOKEN` | `123456:ABC-...` | If using Telegram |
 | `DISCORD_BOT_TOKEN` | `MTIz...` | If using Discord |
 
-> **Tip:** Using environment variables here keeps secrets out of the stack definition and makes them easy to rotate.
+> **Tip:** If you want Portainer's `/config` page to be authoritative, leave the `NGENORCA_*` overrides commented and save your settings through the web UI after first boot.
 
 ### Step 3 — Deploy
 
@@ -103,6 +100,7 @@ Click **Deploy the stack**. Portainer will pull the image (or build from source)
    NgenOrca gateway listening on 0.0.0.0:18789
    ```
 4. Open `http://<your-host>:18789/health` in a browser — you should see `{"status":"ok"}`.
+5. Open `http://<your-host>:18789/config`, save your config, then restart the container.
 
 ---
 
@@ -113,8 +111,8 @@ If you want Portainer to pull directly from the NgenOrca repo (and build from so
 1. **Stacks** → **+ Add stack**.
 2. Under **Build method**, choose **Repository**.
 3. Fill in:
-   - **Repository URL**: `https://github.com/ngenorca/ngenorca`
-   - **Reference**: `main`
+  - **Repository URL**: `https://github.com/mregateiro/NgenOrca`
+  - **Reference**: `master`
    - **Compose path**: `docker-compose.yml`
 4. Add environment variables as in Step 2 above.
 5. Click **Deploy the stack**.
@@ -135,14 +133,13 @@ If you prefer to manage a single container without a stack:
    - Host: `18789` → Container: `18789`
 4. Under **Volumes** → **+ map additional volume**:
    - Container: `/var/lib/ngenorca` → Volume: `ngenorca-data` (create new)
-   - Container: `/etc/ngenorca` → Volume: `ngenorca-config` (create new)
+  - Container: `/var/lib/ngenorca/config` → Volume: `ngenorca-config` (create new)
 5. Under **Env** → **+ add environment variable**:
-   - `NGENORCA_GATEWAY__BIND` = `0.0.0.0`
-   - `NGENORCA_GATEWAY__PORT` = `18789`
-   - `NGENORCA_AGENT__MODEL` = `anthropic/claude-sonnet-4-20250514`
-   - `NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY` = your key
+  - `NGENORCA_DATA_DIR` = `/var/lib/ngenorca/data`
+  - `NGENORCA_AGENT__WORKSPACE` = `/var/lib/ngenorca/workspace`
 6. Under **Restart policy**, select **Unless stopped**.
 7. Click **Deploy the container**.
+8. Open `http://<your-host>:18789/config`, save your config, then restart the container.
 
 ---
 
@@ -182,7 +179,7 @@ Alternatively, use Portainer's **Configs** feature (Business Edition) or bind-mo
 ```yaml
     volumes:
       - ngenorca-data:/var/lib/ngenorca
-      - /path/to/your/config:/etc/ngenorca:ro
+      - /path/to/your/config:/var/lib/ngenorca/config
 ```
 
 ---

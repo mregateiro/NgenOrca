@@ -23,6 +23,7 @@ pub struct AppState {
 /// `AppState::new` avoids the `clippy::too_many_arguments` warning.
 pub struct AppStateParams {
     pub config: NgenOrcaConfig,
+    pub config_file_path: std::path::PathBuf,
     pub event_bus: EventBus,
     pub identity: IdentityManager,
     pub memory: MemoryManager,
@@ -35,6 +36,7 @@ pub struct AppStateParams {
 
 struct AppStateInner {
     pub config: NgenOrcaConfig,
+    pub config_file_path: std::path::PathBuf,
     pub event_bus: EventBus,
     pub identity: IdentityManager,
     pub memory: MemoryManager,
@@ -51,6 +53,7 @@ impl AppState {
         Self {
             inner: Arc::new(AppStateInner {
                 config: params.config,
+                config_file_path: params.config_file_path,
                 event_bus: params.event_bus,
                 identity: params.identity,
                 memory: params.memory,
@@ -66,6 +69,10 @@ impl AppState {
 
     pub fn config(&self) -> &NgenOrcaConfig {
         &self.inner.config
+    }
+
+    pub fn config_file_path(&self) -> &std::path::Path {
+        &self.inner.config_file_path
     }
 
     pub fn event_bus(&self) -> &EventBus {
@@ -114,26 +121,23 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let config = NgenOrcaConfig::default();
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_dir =
+            std::env::temp_dir().join(format!("ngenorca_test_{}_{unique}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let config_file_path = temp_dir.join("config.toml");
         let event_bus = EventBus::new(":memory:").await.unwrap();
         let identity = IdentityManager::new(":memory:").unwrap();
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temp_dir = std::env::temp_dir().join(format!(
-            "ngenorca_test_{}_{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&temp_dir).unwrap();
         let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
         let providers = ProviderRegistry::from_config(&config);
-        let sessions = SessionManager::new(
-            config.agent.model.clone(),
-            config.agent.thinking_level,
-        );
+        let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
         let (plugin_tx, _plugin_rx) = tokio::sync::mpsc::unbounded_channel();
         let plugins = PluginRegistry::new(plugin_tx, std::path::PathBuf::from("/tmp/test_plugins"));
         let learned_router = LearnedRouter::new(":memory:").unwrap();
         let metrics = Metrics::new();
         AppState::new(AppStateParams {
             config,
+            config_file_path,
             event_bus,
             identity,
             memory,

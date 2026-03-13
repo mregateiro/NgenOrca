@@ -14,8 +14,8 @@
 //! schema, which is validated at load time.
 
 use figment::{
-    providers::{Env, Format, Serialized, Toml},
     Figment,
+    providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -190,9 +190,15 @@ impl std::fmt::Debug for GatewayConfig {
             .field("rate_limit_max", &self.rate_limit_max)
             .field("rate_limit_window_secs", &self.rate_limit_window_secs)
             .field("session_ttl_secs", &self.session_ttl_secs)
-            .field("session_prune_interval_secs", &self.session_prune_interval_secs)
+            .field(
+                "session_prune_interval_secs",
+                &self.session_prune_interval_secs,
+            )
             .field("event_log_retention_days", &self.event_log_retention_days)
-            .field("event_log_prune_interval_secs", &self.event_log_prune_interval_secs)
+            .field(
+                "event_log_prune_interval_secs",
+                &self.event_log_prune_interval_secs,
+            )
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("max_message_length", &self.max_message_length)
             .field("trusted_proxy_sources", &self.trusted_proxy_sources)
@@ -1020,57 +1026,172 @@ pub struct ObservabilityConfig {
 
 // ─── Default value functions ────────────────────────────────────
 
-fn default_bind() -> String { "127.0.0.1".into() }
-fn default_port() -> u16 { 18789 }
-fn default_model() -> String { "anthropic/claude-sonnet-4-20250514".into() }
-fn default_data_dir() -> PathBuf { dirs_default().join("data") }
-fn default_workspace() -> PathBuf { dirs_default().join("workspace") }
-fn default_true() -> bool { true }
-fn default_auto_lock_minutes() -> u32 { 30 }
-fn default_episodic_max() -> usize { 100_000 }
-fn default_consolidation_interval() -> u64 { 3600 }
-fn default_semantic_budget() -> usize { 4096 }
-fn default_otlp_endpoint() -> String { "http://localhost:4317".into() }
-fn default_log_level() -> String { "info".into() }
-fn default_proxy_user_header() -> String { "Remote-User".into() }
-fn default_proxy_email_header() -> String { "Remote-Email".into() }
-fn default_proxy_groups_header() -> String { "Remote-Groups".into() }
-fn default_anthropic_url() -> String { "https://api.anthropic.com".into() }
-fn default_anthropic_api_version() -> String { "2023-06-01".into() }
-fn default_openai_url() -> String { "https://api.openai.com/v1".into() }
-fn default_ollama_url() -> String { "http://127.0.0.1:11434".into() }
-fn default_azure_api_version() -> String { "2024-10-21".into() }
-fn default_google_url() -> String { "https://generativelanguage.googleapis.com/v1beta".into() }
-fn default_openrouter_url() -> String { "https://openrouter.ai/api/v1".into() }
-fn default_classifier_confidence() -> f64 { 0.8 }
-fn default_classifier_max_tokens() -> usize { 64 }
-fn default_classifier_temperature() -> f64 { 0.1 }
-fn default_quality_method() -> String { "auto".into() }
-fn default_min_response_length() -> usize { 10 }
-fn default_max_escalations() -> u32 { 2 }
-fn default_sub_agent_max_tokens() -> usize { 2048 }
-fn default_sub_agent_temperature() -> f64 { 0.3 }
-fn default_max_complexity() -> String { "Moderate".into() }
-fn default_cost_weight() -> u32 { 1 }
-fn default_priority() -> u32 { 10 }
-fn default_rate_limit_max() -> u32 { 60 }
-fn default_rate_limit_window_secs() -> u64 { 60 }
-fn default_session_ttl_secs() -> u64 { 7200 }
-fn default_session_prune_interval_secs() -> u64 { 300 }
-fn default_event_log_retention_days() -> u64 { 7 }
-fn default_event_log_prune_interval_secs() -> u64 { 21_600 }
-fn default_max_message_length() -> usize { 32_768 }
+fn default_bind() -> String {
+    "127.0.0.1".into()
+}
+fn default_port() -> u16 {
+    18789
+}
+fn default_model() -> String {
+    "anthropic/claude-sonnet-4-20250514".into()
+}
+fn default_data_dir() -> PathBuf {
+    dirs_default().join("data")
+}
+fn default_workspace() -> PathBuf {
+    dirs_default().join("workspace")
+}
+fn default_true() -> bool {
+    true
+}
+fn default_auto_lock_minutes() -> u32 {
+    30
+}
+fn default_episodic_max() -> usize {
+    100_000
+}
+fn default_consolidation_interval() -> u64 {
+    3600
+}
+fn default_semantic_budget() -> usize {
+    4096
+}
+fn default_otlp_endpoint() -> String {
+    "http://localhost:4317".into()
+}
+fn default_log_level() -> String {
+    "info".into()
+}
+fn default_proxy_user_header() -> String {
+    "Remote-User".into()
+}
+fn default_proxy_email_header() -> String {
+    "Remote-Email".into()
+}
+fn default_proxy_groups_header() -> String {
+    "Remote-Groups".into()
+}
+fn default_anthropic_url() -> String {
+    "https://api.anthropic.com".into()
+}
+fn default_anthropic_api_version() -> String {
+    "2023-06-01".into()
+}
+fn default_openai_url() -> String {
+    "https://api.openai.com/v1".into()
+}
+fn default_ollama_url() -> String {
+    "http://127.0.0.1:11434".into()
+}
+fn default_azure_api_version() -> String {
+    "2024-10-21".into()
+}
+fn default_google_url() -> String {
+    "https://generativelanguage.googleapis.com/v1beta".into()
+}
+fn default_openrouter_url() -> String {
+    "https://openrouter.ai/api/v1".into()
+}
+fn default_classifier_confidence() -> f64 {
+    0.8
+}
+fn default_classifier_max_tokens() -> usize {
+    64
+}
+fn default_classifier_temperature() -> f64 {
+    0.1
+}
+fn default_quality_method() -> String {
+    "auto".into()
+}
+fn default_min_response_length() -> usize {
+    10
+}
+fn default_max_escalations() -> u32 {
+    2
+}
+fn default_sub_agent_max_tokens() -> usize {
+    2048
+}
+fn default_sub_agent_temperature() -> f64 {
+    0.3
+}
+fn default_max_complexity() -> String {
+    "Moderate".into()
+}
+fn default_cost_weight() -> u32 {
+    1
+}
+fn default_priority() -> u32 {
+    10
+}
+fn default_rate_limit_max() -> u32 {
+    60
+}
+fn default_rate_limit_window_secs() -> u64 {
+    60
+}
+fn default_session_ttl_secs() -> u64 {
+    7200
+}
+fn default_session_prune_interval_secs() -> u64 {
+    300
+}
+fn default_event_log_retention_days() -> u64 {
+    7
+}
+fn default_event_log_prune_interval_secs() -> u64 {
+    21_600
+}
+fn default_max_message_length() -> usize {
+    32_768
+}
 fn default_trusted_proxy_sources() -> Vec<String> {
     vec!["127.0.0.1".into(), "::1".into()]
 }
-fn default_webchat_theme() -> String { "dark".into() }
-fn default_upload_size() -> usize { 10 }
-fn default_whatsapp_webhook_path() -> String { "/webhooks/whatsapp".into() }
-fn default_signal_mode() -> String { "daemon".into() }
-fn default_teams_tenant() -> String { "common".into() }
+fn default_webchat_theme() -> String {
+    "dark".into()
+}
+fn default_upload_size() -> usize {
+    10
+}
+fn default_whatsapp_webhook_path() -> String {
+    "/webhooks/whatsapp".into()
+}
+fn default_signal_mode() -> String {
+    "daemon".into()
+}
+fn default_teams_tenant() -> String {
+    "common".into()
+}
 
 fn dirs_default() -> PathBuf {
     dirs_home().join(".ngenorca")
+}
+
+pub fn default_user_config_path() -> PathBuf {
+    dirs_default().join("config.toml")
+}
+
+pub fn default_system_config_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var("PROGRAMDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("C:\\ProgramData"))
+            .join("ngenorca")
+            .join("config.toml")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/etc/ngenorca/config.toml")
+    }
+}
+
+pub fn resolve_config_path(config_path: Option<&str>) -> PathBuf {
+    config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(default_user_config_path)
 }
 
 fn dirs_home() -> PathBuf {
@@ -1237,13 +1358,16 @@ impl NgenOrcaConfig {
 
     /// Check if multi-agent orchestration is enabled.
     pub fn is_orchestrated(&self) -> bool {
-        !matches!(self.agent.routing, RoutingStrategy::Single)
-            && !self.agent.sub_agents.is_empty()
+        !matches!(self.agent.routing, RoutingStrategy::Single) && !self.agent.sub_agents.is_empty()
     }
 
     /// Get the list of configured sub-agent names.
     pub fn sub_agent_names(&self) -> Vec<&str> {
-        self.agent.sub_agents.iter().map(|s| s.name.as_str()).collect()
+        self.agent
+            .sub_agents
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect()
     }
 
     /// Find a sub-agent config by name.
@@ -1253,7 +1377,8 @@ impl NgenOrcaConfig {
 
     /// Get sub-agents that can handle a given role.
     pub fn sub_agents_for_role(&self, role: &str) -> Vec<&SubAgentConfig> {
-        self.agent.sub_agents
+        self.agent
+            .sub_agents
             .iter()
             .filter(|s| s.roles.iter().any(|r| r.eq_ignore_ascii_case(role)))
             .collect()
@@ -1282,7 +1407,9 @@ impl NgenOrcaConfig {
             errors.push("gateway.bind must not be empty".into());
         }
         if self.gateway.rate_limit_window_secs == 0 && self.gateway.rate_limit_max > 0 {
-            errors.push("gateway.rate_limit_window_secs must be > 0 when rate limiting is enabled".into());
+            errors.push(
+                "gateway.rate_limit_window_secs must be > 0 when rate limiting is enabled".into(),
+            );
         }
         if self.gateway.session_ttl_secs == 0 {
             warnings.push("gateway.session_ttl_secs is 0 — sessions will never expire".into());
@@ -1291,7 +1418,10 @@ impl NgenOrcaConfig {
             warnings.push("gateway.session_prune_interval_secs is 0 — session pruning will run in a tight loop".into());
         }
         if self.gateway.event_log_retention_days == 0 {
-            warnings.push("gateway.event_log_retention_days is 0 — event logs will be pruned immediately".into());
+            warnings.push(
+                "gateway.event_log_retention_days is 0 — event logs will be pruned immediately"
+                    .into(),
+            );
         }
         if self.gateway.event_log_prune_interval_secs == 0 {
             warnings.push("gateway.event_log_prune_interval_secs is 0 — event log pruning will run in a tight loop".into());
@@ -1300,8 +1430,14 @@ impl NgenOrcaConfig {
         // Auth-mode-specific
         match &self.gateway.auth_mode {
             AuthMode::Password => {
-                if self.gateway.auth_password.as_ref().is_none_or(|p| p.is_empty()) {
-                    errors.push("gateway.auth_password is required when auth_mode = Password".into());
+                if self
+                    .gateway
+                    .auth_password
+                    .as_ref()
+                    .is_none_or(|p| p.is_empty())
+                {
+                    errors
+                        .push("gateway.auth_password is required when auth_mode = Password".into());
                 }
             }
             AuthMode::Token => {
@@ -1366,61 +1502,114 @@ impl NgenOrcaConfig {
 
         // ── Channels ──
         if let Some(tg) = &self.channels.telegram
-            && tg.enabled && tg.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.telegram.bot_token is required when telegram is enabled".into());
-            }
+            && tg.enabled
+            && tg.bot_token.as_ref().is_none_or(|t| t.is_empty())
+        {
+            errors.push("channels.telegram.bot_token is required when telegram is enabled".into());
+        }
         if let Some(dc) = &self.channels.discord
-            && dc.enabled && dc.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.discord.bot_token is required when discord is enabled".into());
-            }
+            && dc.enabled
+            && dc.bot_token.as_ref().is_none_or(|t| t.is_empty())
+        {
+            errors.push("channels.discord.bot_token is required when discord is enabled".into());
+        }
         // WhatsApp: Native mode (no access_token) is always valid.
         // No special validation needed — native mode works with just enabled=true.
         if let Some(sl) = &self.channels.slack
-            && sl.enabled && sl.bot_token.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.slack.bot_token is required when slack is enabled".into());
-            }
+            && sl.enabled
+            && sl.bot_token.as_ref().is_none_or(|t| t.is_empty())
+        {
+            errors.push("channels.slack.bot_token is required when slack is enabled".into());
+        }
         if let Some(sg) = &self.channels.signal
-            && sg.enabled && sg.phone_number.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.signal.phone_number is required when signal is enabled".into());
-            }
+            && sg.enabled
+            && sg.phone_number.as_ref().is_none_or(|t| t.is_empty())
+        {
+            errors.push("channels.signal.phone_number is required when signal is enabled".into());
+        }
         if let Some(mx) = &self.channels.matrix
-            && mx.enabled && mx.access_token.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.matrix.access_token is required when matrix is enabled".into());
-            }
+            && mx.enabled
+            && mx.access_token.as_ref().is_none_or(|t| t.is_empty())
+        {
+            errors.push("channels.matrix.access_token is required when matrix is enabled".into());
+        }
         if let Some(tm) = &self.channels.teams
-            && tm.enabled && tm.app_id.as_ref().is_none_or(|t| t.is_empty()) {
-                errors.push("channels.teams.app_id is required when teams is enabled".into());
-            }
+            && tm.enabled
+            && tm.app_id.as_ref().is_none_or(|t| t.is_empty())
+        {
+            errors.push("channels.teams.app_id is required when teams is enabled".into());
+        }
 
         // ── Provider validation ──
         let url_fields: Vec<(&str, &str)> = vec![
-            self.agent.providers.anthropic.as_ref().map(|p| ("agent.providers.anthropic.base_url", p.base_url.as_str())),
-            self.agent.providers.openai.as_ref().map(|p| ("agent.providers.openai.base_url", p.base_url.as_str())),
-            self.agent.providers.ollama.as_ref().map(|p| ("agent.providers.ollama.base_url", p.base_url.as_str())),
-            self.agent.providers.azure.as_ref().and_then(|p| p.endpoint.as_ref().map(|e| ("agent.providers.azure.endpoint", e.as_str()))),
-            self.agent.providers.google.as_ref().map(|p| ("agent.providers.google.base_url", p.base_url.as_str())),
-            self.agent.providers.openrouter.as_ref().map(|p| ("agent.providers.openrouter.base_url", p.base_url.as_str())),
-            self.agent.providers.custom.as_ref().map(|p| ("agent.providers.custom.base_url", p.base_url.as_str())),
-        ].into_iter().flatten().collect();
+            self.agent
+                .providers
+                .anthropic
+                .as_ref()
+                .map(|p| ("agent.providers.anthropic.base_url", p.base_url.as_str())),
+            self.agent
+                .providers
+                .openai
+                .as_ref()
+                .map(|p| ("agent.providers.openai.base_url", p.base_url.as_str())),
+            self.agent
+                .providers
+                .ollama
+                .as_ref()
+                .map(|p| ("agent.providers.ollama.base_url", p.base_url.as_str())),
+            self.agent.providers.azure.as_ref().and_then(|p| {
+                p.endpoint
+                    .as_ref()
+                    .map(|e| ("agent.providers.azure.endpoint", e.as_str()))
+            }),
+            self.agent
+                .providers
+                .google
+                .as_ref()
+                .map(|p| ("agent.providers.google.base_url", p.base_url.as_str())),
+            self.agent
+                .providers
+                .openrouter
+                .as_ref()
+                .map(|p| ("agent.providers.openrouter.base_url", p.base_url.as_str())),
+            self.agent
+                .providers
+                .custom
+                .as_ref()
+                .map(|p| ("agent.providers.custom.base_url", p.base_url.as_str())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
         for (field, url) in &url_fields {
             if !url.starts_with("http://") && !url.starts_with("https://") {
-                errors.push(format!("{field} must start with http:// or https://, got \"{url}\""));
+                errors.push(format!(
+                    "{field} must start with http:// or https://, got \"{url}\""
+                ));
             }
         }
 
         // Temperature range validation (0.0–2.0) for providers that set it
         if let Some(p) = &self.agent.providers.anthropic {
-            if let Some(t) = p.temperature && !(0.0..=2.0).contains(&t) {
-                errors.push(format!("agent.providers.anthropic.temperature must be 0.0–2.0, got {t}"));
+            if let Some(t) = p.temperature
+                && !(0.0..=2.0).contains(&t)
+            {
+                errors.push(format!(
+                    "agent.providers.anthropic.temperature must be 0.0–2.0, got {t}"
+                ));
             }
             if p.max_tokens == Some(0) {
                 errors.push("agent.providers.anthropic.max_tokens must be > 0".into());
             }
         }
         if let Some(p) = &self.agent.providers.openai {
-            if let Some(t) = p.temperature && !(0.0..=2.0).contains(&t) {
-                errors.push(format!("agent.providers.openai.temperature must be 0.0–2.0, got {t}"));
+            if let Some(t) = p.temperature
+                && !(0.0..=2.0).contains(&t)
+            {
+                errors.push(format!(
+                    "agent.providers.openai.temperature must be 0.0–2.0, got {t}"
+                ));
             }
             if p.max_tokens == Some(0) {
                 errors.push("agent.providers.openai.max_tokens must be > 0".into());
@@ -1429,7 +1618,10 @@ impl NgenOrcaConfig {
 
         // ── Memory ──
         if self.memory.consolidation_interval_secs == 0 {
-            warnings.push("memory.consolidation_interval_secs is 0 — consolidation will run in a tight loop".into());
+            warnings.push(
+                "memory.consolidation_interval_secs is 0 — consolidation will run in a tight loop"
+                    .into(),
+            );
         }
 
         if errors.is_empty() {
@@ -1444,12 +1636,16 @@ impl NgenOrcaConfig {
 pub fn load_config(config_path: Option<&str>) -> ngenorca_core::Result<NgenOrcaConfig> {
     let mut figment = Figment::from(Serialized::defaults(NgenOrcaConfig::default()));
 
-    // User config file.
-    let user_config = config_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_default().join("config.toml"));
+    let system_config = default_system_config_path();
+    if system_config.exists() {
+        info!(?system_config, "Loading system config file");
+        figment = figment.merge(Toml::file(&system_config));
+    }
 
-    if user_config.exists() {
+    // User config file.
+    let user_config = resolve_config_path(config_path);
+
+    if user_config != system_config && user_config.exists() {
         info!(?user_config, "Loading config file");
         figment = figment.merge(Toml::file(&user_config));
     }
@@ -1472,9 +1668,11 @@ pub fn load_config(config_path: Option<&str>) -> ngenorca_core::Result<NgenOrcaC
             for e in &errors {
                 tracing::error!("Config error: {e}");
             }
-            return Err(ngenorca_core::Error::Config(
-                format!("Configuration has {} error(s): {}", errors.len(), errors.join("; "))
-            ));
+            return Err(ngenorca_core::Error::Config(format!(
+                "Configuration has {} error(s): {}",
+                errors.len(),
+                errors.join("; ")
+            )));
         }
     }
 
@@ -1671,7 +1869,10 @@ mod tests {
         let mut cfg = NgenOrcaConfig::default();
         cfg.agent.sub_agents = sample_sub_agents();
         assert!(cfg.sub_agent("coder").is_some());
-        assert_eq!(cfg.sub_agent("coder").unwrap().model, "ollama/codellama:13b");
+        assert_eq!(
+            cfg.sub_agent("coder").unwrap().model,
+            "ollama/codellama:13b"
+        );
         assert!(cfg.sub_agent("nonexistent").is_none());
     }
 
@@ -1889,7 +2090,11 @@ mod tests {
         let mut cfg = NgenOrcaConfig::default();
         cfg.memory.consolidation_interval_secs = 0;
         let warnings = cfg.validate().unwrap();
-        assert!(warnings.iter().any(|w| w.contains("consolidation_interval")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("consolidation_interval"))
+        );
     }
 
     #[test]
@@ -1998,7 +2203,10 @@ mod tests {
             temperature: None,
         });
         let errs = cfg.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("base_url") && e.contains("http")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("base_url") && e.contains("http"))
+        );
     }
 
     #[test]

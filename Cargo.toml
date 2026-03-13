@@ -57,7 +57,7 @@ prost = "0.13"
 qrcode = "0.14"
 
 # JWT / JWKS verification
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 
 # HTTP / WebSocket
 axum = { version = "0.8", features = ["ws"] }

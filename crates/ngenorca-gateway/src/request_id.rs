@@ -7,12 +7,7 @@
 //!    the request carry the same correlation ID.
 //! 2. Returned in the response as the `x-request-id` header.
 
-use axum::{
-    extract::Request,
-    http::HeaderValue,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::HeaderValue, middleware::Next, response::Response};
 use tracing::Span;
 use uuid::Uuid;
 

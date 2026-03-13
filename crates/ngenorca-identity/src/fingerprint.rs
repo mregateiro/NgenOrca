@@ -14,9 +14,9 @@
 //! Without these features, the system gracefully falls back to a software-based
 //! composite fingerprint using Ed25519 (via `ring`).
 
+use ngenorca_core::Result;
 use ngenorca_core::identity::AttestationType;
 use ngenorca_core::types::DeviceId;
-use ngenorca_core::Result;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use tracing::info;
 
@@ -79,10 +79,10 @@ fn generate_composite_fingerprint() -> Result<(DeviceId, AttestationType, Vec<u8
     let public_key = key_pair.public_key().as_ref().to_vec();
 
     // Device ID = hash of hostname + public key.
-    let device_id_input = format!("{hostname}:{os_info}:{}", base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &public_key,
-    ));
+    let device_id_input = format!(
+        "{hostname}:{os_info}:{}",
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &public_key,)
+    );
     let device_id = DeviceId(format!(
         "sw-{}",
         &sha256_hex(device_id_input.as_bytes())[..16]
@@ -100,18 +100,15 @@ fn generate_composite_fingerprint() -> Result<(DeviceId, AttestationType, Vec<u8
 /// Requires the `tpm` feature flag. Without it, falls back to composite.
 #[cfg(all(windows, feature = "tpm"))]
 fn generate_tpm_fingerprint() -> Result<(DeviceId, AttestationType, Vec<u8>)> {
-    use windows::core::w;
     use windows::Win32::Security::Cryptography::*;
+    use windows::core::w;
 
     unsafe {
         // Open the Microsoft Platform Crypto Provider (TPM-backed).
         let mut provider = NCRYPT_PROV_HANDLE::default();
-        NCryptOpenStorageProvider(
-            &mut provider,
-            MS_PLATFORM_CRYPTO_PROVIDER,
-            0,
-        )
-        .map_err(|e| ngenorca_core::Error::Identity(format!("TPM provider open failed: {e}")))?;
+        NCryptOpenStorageProvider(&mut provider, MS_PLATFORM_CRYPTO_PROVIDER, 0).map_err(|e| {
+            ngenorca_core::Error::Identity(format!("TPM provider open failed: {e}"))
+        })?;
 
         let key_name = w!("NgenOrca-DeviceIdentity");
         let mut key = NCRYPT_KEY_HANDLE::default();
@@ -136,8 +133,9 @@ fn generate_tpm_fingerprint() -> Result<(DeviceId, AttestationType, Vec<u8>)> {
             )
             .map_err(|e| ngenorca_core::Error::Identity(format!("TPM key creation failed: {e}")))?;
 
-            NCryptFinalizeKey(key, NCRYPT_FLAGS(0))
-                .map_err(|e| ngenorca_core::Error::Identity(format!("TPM key finalize failed: {e}")))?;
+            NCryptFinalizeKey(key, NCRYPT_FLAGS(0)).map_err(|e| {
+                ngenorca_core::Error::Identity(format!("TPM key finalize failed: {e}"))
+            })?;
 
             info!("Created new persistent ECDSA P-256 key in TPM");
         } else {
@@ -167,7 +165,9 @@ fn generate_tpm_fingerprint() -> Result<(DeviceId, AttestationType, Vec<u8>)> {
             &mut pub_key_size,
             NCRYPT_FLAGS(0),
         )
-        .map_err(|e| ngenorca_core::Error::Identity(format!("TPM public key export failed: {e}")))?;
+        .map_err(|e| {
+            ngenorca_core::Error::Identity(format!("TPM public key export failed: {e}"))
+        })?;
         pub_key_bytes.truncate(pub_key_size as usize);
 
         let device_id = DeviceId(format!("tpm-{}", &sha256_hex(&pub_key_bytes)[..16]));
@@ -202,10 +202,12 @@ fn generate_secure_enclave_fingerprint() -> Result<(DeviceId, AttestationType, V
     // Try to find an existing key with this tag.
     if let Some(existing_key) = SecKey::find(tag) {
         info!("Found existing Secure Enclave device key");
-        let pub_key = existing_key.public_key()
+        let pub_key = existing_key
+            .public_key()
             .ok_or_else(|| ngenorca_core::Error::Identity("Failed to get SE public key".into()))?;
-        let pub_key_data = pub_key.external_representation()
-            .ok_or_else(|| ngenorca_core::Error::Identity("Failed to export SE public key".into()))?;
+        let pub_key_data = pub_key.external_representation().ok_or_else(|| {
+            ngenorca_core::Error::Identity("Failed to export SE public key".into())
+        })?;
         let pub_bytes = pub_key_data.to_vec();
         let device_id = DeviceId(format!("se-{}", &sha256_hex(&pub_bytes)[..16]));
         return Ok((device_id, AttestationType::SecureEnclave, pub_bytes));
@@ -223,9 +225,11 @@ fn generate_secure_enclave_fingerprint() -> Result<(DeviceId, AttestationType, V
 
     info!("Created new ECDSA P-256 key in Secure Enclave");
 
-    let pub_key = private_key.public_key()
+    let pub_key = private_key
+        .public_key()
         .ok_or_else(|| ngenorca_core::Error::Identity("Failed to get SE public key".into()))?;
-    let pub_key_data = pub_key.external_representation()
+    let pub_key_data = pub_key
+        .external_representation()
         .ok_or_else(|| ngenorca_core::Error::Identity("Failed to export SE public key".into()))?;
     let pub_bytes = pub_key_data.to_vec();
     let device_id = DeviceId(format!("se-{}", &sha256_hex(&pub_bytes)[..16]));
@@ -236,7 +240,9 @@ fn generate_secure_enclave_fingerprint() -> Result<(DeviceId, AttestationType, V
 /// Fallback when `secure-enclave` feature is not enabled on macOS, or on non-macOS.
 #[cfg(not(all(target_os = "macos", feature = "secure-enclave")))]
 fn generate_secure_enclave_fingerprint() -> Result<(DeviceId, AttestationType, Vec<u8>)> {
-    tracing::warn!("Secure Enclave integration requires the `secure-enclave` feature — using composite fingerprint");
+    tracing::warn!(
+        "Secure Enclave integration requires the `secure-enclave` feature — using composite fingerprint"
+    );
     generate_composite_fingerprint()
 }
 
@@ -278,9 +284,7 @@ fn get_hostname() -> String {
     #[cfg(not(windows))]
     {
         std::env::var("HOSTNAME")
-            .or_else(|_| {
-                std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string())
-            })
+            .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
             .unwrap_or_else(|_| "unknown".to_string())
     }
 }
@@ -289,9 +293,5 @@ fn get_hostname() -> String {
 fn sha256_hex(data: &[u8]) -> String {
     use ring::digest;
     let digest = digest::digest(&digest::SHA256, data);
-    digest
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }

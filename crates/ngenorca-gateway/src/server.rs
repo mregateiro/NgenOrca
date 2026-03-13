@@ -14,7 +14,12 @@ use tracing::{info, warn};
 /// Run the gateway server.
 pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
     let auth_mode = format!("{:?}", state.config().gateway.auth_mode);
-    let channels: Vec<String> = state.config().enabled_channels().into_iter().map(|s| s.to_owned()).collect();
+    let channels: Vec<String> = state
+        .config()
+        .enabled_channels()
+        .into_iter()
+        .map(|s| s.to_owned())
+        .collect();
     let (provider, model) = {
         let (p, m) = state.config().parse_model();
         (p.to_owned(), m.to_owned())
@@ -42,10 +47,8 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
         CorsLayer::permissive()
     } else {
         cors_info = format!("{:?}", cors_origins);
-        let origins: Vec<axum::http::HeaderValue> = cors_origins
-            .iter()
-            .filter_map(|o| o.parse().ok())
-            .collect();
+        let origins: Vec<axum::http::HeaderValue> =
+            cors_origins.iter().filter_map(|o| o.parse().ok()).collect();
         CorsLayer::new()
             .allow_origin(AllowOrigin::list(origins))
             .allow_methods(tower_http::cors::Any)
@@ -113,8 +116,7 @@ pub async fn run(state: AppState, bind: &str, port: u16) -> Result<()> {
 /// SEC-04: unauthenticated bind, SEC-06: monitoring-path exposure.
 pub(crate) fn startup_security_warnings(auth_mode: &str, bind: &str) -> Vec<String> {
     let mut warnings = Vec::new();
-    let is_loopback =
-        bind == "127.0.0.1" || bind == "::1" || bind == "localhost";
+    let is_loopback = bind == "127.0.0.1" || bind == "::1" || bind == "localhost";
 
     // SEC-04: auth_mode=None on a non-loopback address.
     if auth_mode == "None" && !is_loopback {

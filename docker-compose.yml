@@ -19,27 +19,22 @@ services:
     image: ngenorca/ngenorca:latest
     container_name: ngenorca
     restart: unless-stopped
+    command: ["ngenorca", "gateway", "--bind", "0.0.0.0", "--port", "18789", "--config", "/var/lib/ngenorca/config/config.toml"]
     ports:
       - "18789:18789"
     volumes:
       - ngenorca-data:/var/lib/ngenorca
-      - ./config:/etc/ngenorca:ro
+      - ngenorca-config:/var/lib/ngenorca/config
     environment:
-      - NGENORCA_GATEWAY__BIND=0.0.0.0
-      - NGENORCA_GATEWAY__PORT=18789
-      # Auth mode (None for local, TrustedProxy behind nginx+Authelia):
+      - NGENORCA_DATA_DIR=/var/lib/ngenorca/data
+      - NGENORCA_AGENT__WORKSPACE=/var/lib/ngenorca/workspace
+      # Optional bootstrap overrides. Leave these commented if you want the
+      # /config web UI to be the main source of truth.
       # - NGENORCA_GATEWAY__AUTH_MODE=TrustedProxy
-      #
-      # LLM Provider (set your API key here or in .env):
       # - NGENORCA_AGENT__MODEL=anthropic/claude-sonnet-4-20250514
       # - NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY=${ANTHROPIC_API_KEY}
-      # - NGENORCA_AGENT__PROVIDERS__OPENAI__API_KEY=${OPENAI_API_KEY}
-      #
-      # Channels (set tokens here or in .env):
       # - NGENORCA_CHANNELS__TELEGRAM__ENABLED=true
       # - NGENORCA_CHANNELS__TELEGRAM__BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      # - NGENORCA_CHANNELS__DISCORD__ENABLED=true
-      # - NGENORCA_CHANNELS__DISCORD__BOT_TOKEN=${DISCORD_BOT_TOKEN}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:18789/health"]
       interval: 30s
@@ -86,4 +81,6 @@ services:
 
 volumes:
   ngenorca-data:
+    driver: local
+  ngenorca-config:
     driver: local

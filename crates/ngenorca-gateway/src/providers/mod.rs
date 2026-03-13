@@ -10,7 +10,7 @@ pub mod registry;
 pub mod retry;
 
 pub use registry::ProviderRegistry;
-pub use retry::{retry_with_backoff, RetryConfig};
+pub use retry::{RetryConfig, retry_with_backoff};
 
 use ngenorca_core::Error;
 
@@ -27,12 +27,8 @@ pub fn map_provider_http_error(provider: &str, status: reqwest::StatusCode, body
         500 | 502 | 503 | 504 => {
             Error::ProviderUnavailable(format!("{provider} HTTP {status}: {body}"))
         }
-        401 | 403 => {
-            Error::Unauthorized(format!("{provider} HTTP {status}: {body}"))
-        }
-        _ => {
-            Error::Gateway(format!("{provider} HTTP {status}: {body}"))
-        }
+        401 | 403 => Error::Unauthorized(format!("{provider} HTTP {status}: {body}")),
+        _ => Error::Gateway(format!("{provider} HTTP {status}: {body}")),
     }
 }
 

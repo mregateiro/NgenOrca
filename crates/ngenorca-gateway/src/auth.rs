@@ -72,14 +72,8 @@ pub async fn auth_middleware(
     // verification (HMAC, JWT, etc.) and must remain reachable even in
     // TrustedProxy mode where third-party providers cannot inject proxy
     // identity headers.
-    if path == "/health"
-        || path == "/metrics"
-        || path == "/"
-        || path.starts_with("/webhooks/")
-    {
-        request
-            .extensions_mut()
-            .insert(CallerIdentity::default());
+    if path == "/health" || path == "/metrics" || path == "/" || path.starts_with("/webhooks/") {
+        request.extensions_mut().insert(CallerIdentity::default());
         return Ok(next.run(request).await);
     }
 
@@ -174,12 +168,14 @@ pub async fn auth_middleware(
                 .map(|s| s.trim());
 
             match token {
-                Some(t) if config.gateway.auth_tokens.iter().any(|valid| {
-                    // Constant-time comparison to prevent timing side-channels.
-                    let a = valid.as_bytes();
-                    let b = t.as_bytes();
-                    a.len() == b.len() && a.ct_eq(b).into()
-                }) => {
+                Some(t)
+                    if config.gateway.auth_tokens.iter().any(|valid| {
+                        // Constant-time comparison to prevent timing side-channels.
+                        let a = valid.as_bytes();
+                        let b = t.as_bytes();
+                        a.len() == b.len() && a.ct_eq(b).into()
+                    }) =>
+                {
                     CallerIdentity {
                         username: Some("token-user".to_string()),
                         auth_method: AuthMethod::Token,
@@ -204,18 +200,14 @@ pub async fn auth_middleware(
                 .and_then(|v| v.strip_prefix("Basic "))
                 .and_then(|b64| {
                     use base64::Engine;
-                    base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .ok()
+                    base64::engine::general_purpose::STANDARD.decode(b64).ok()
                 })
                 .and_then(|bytes| String::from_utf8(bytes).ok());
 
             match credentials {
                 Some(creds) => {
                     // Format: "username:password" — we only check password.
-                    let (user, pass) = creds
-                        .split_once(':')
-                        .unwrap_or(("anonymous", &creds));
+                    let (user, pass) = creds.split_once(':').unwrap_or(("anonymous", &creds));
 
                     let valid = config
                         .gateway
@@ -283,9 +275,7 @@ pub fn ip_matches_allowlist(source_ip: &IpAddr, allowed: &[String]) -> bool {
             }
         }
         // Exact IP match (parse to normalise representation).
-        entry
-            .parse::<IpAddr>()
-            .is_ok_and(|a| a == *source_ip)
+        entry.parse::<IpAddr>().is_ok_and(|a| a == *source_ip)
     })
 }
 

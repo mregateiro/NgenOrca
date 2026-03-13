@@ -10,15 +10,15 @@
 
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
+use ngenorca_core::ChannelKind;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::message::{Content, Direction, Message};
-use ngenorca_core::plugin::{Permission, PluginKind, PluginManifest, API_VERSION};
+use ngenorca_core::plugin::{API_VERSION, Permission, PluginKind, PluginManifest};
 use ngenorca_core::types::{ChannelId, EventId, PluginId, SessionId, TrustLevel, UserId};
-use ngenorca_core::ChannelKind;
-use ngenorca_plugin_sdk::{flume_like, ChannelAdapter, Plugin, PluginContext};
+use ngenorca_plugin_sdk::{ChannelAdapter, Plugin, PluginContext, flume_like};
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
@@ -39,11 +39,7 @@ pub struct DiscordAdapter {
 }
 
 impl DiscordAdapter {
-    pub fn new(
-        bot_token: String,
-        guild_ids: Vec<String>,
-        command_prefix: Option<String>,
-    ) -> Self {
+    pub fn new(bot_token: String, guild_ids: Vec<String>, command_prefix: Option<String>) -> Self {
         Self {
             bot_token,
             guild_ids,
@@ -268,12 +264,10 @@ impl ChannelAdapter for DiscordAdapter {
                         // 3. Spawn heartbeat task.
                         let hb_running = running.clone();
                         let hb_seq = sequence.clone();
-                        let (hb_tx, mut hb_rx) =
-                            tokio::sync::mpsc::unbounded_channel::<String>();
+                        let (hb_tx, mut hb_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
                         let hb_handle = tokio::spawn(async move {
-                            let interval =
-                                std::time::Duration::from_millis(heartbeat_interval);
+                            let interval = std::time::Duration::from_millis(heartbeat_interval);
                             while hb_running.load(Ordering::SeqCst) {
                                 tokio::time::sleep(interval).await;
                                 let seq = hb_seq.lock().await;
@@ -488,9 +482,8 @@ mod tests {
     #[test]
     fn message_converts_with_prefix() {
         let data = make_msg("!hello world", false, Some("guild1"));
-        let msg =
-            DiscordAdapter::gateway_message_to_ngenorca(&data, Some("!"), &["guild1".into()])
-                .unwrap();
+        let msg = DiscordAdapter::gateway_message_to_ngenorca(&data, Some("!"), &["guild1".into()])
+            .unwrap();
         assert_eq!(msg.user_id, Some(UserId("discord:user789".into())));
         match &msg.content {
             Content::Text(t) => assert_eq!(t, "hello world"),
@@ -528,8 +521,7 @@ mod tests {
     #[test]
     fn dm_allowed_through() {
         let data = make_msg("!hello", false, None);
-        let msg =
-            DiscordAdapter::gateway_message_to_ngenorca(&data, Some("!"), &["guild1".into()]);
+        let msg = DiscordAdapter::gateway_message_to_ngenorca(&data, Some("!"), &["guild1".into()]);
         assert!(msg.is_some());
     }
 
@@ -537,8 +529,7 @@ mod tests {
     fn no_prefix_passes_all() {
         let data = make_msg("normal message", false, Some("guild1"));
         let msg =
-            DiscordAdapter::gateway_message_to_ngenorca(&data, None, &["guild1".into()])
-                .unwrap();
+            DiscordAdapter::gateway_message_to_ngenorca(&data, None, &["guild1".into()]).unwrap();
         match &msg.content {
             Content::Text(t) => assert_eq!(t, "normal message"),
             _ => panic!("Expected text"),

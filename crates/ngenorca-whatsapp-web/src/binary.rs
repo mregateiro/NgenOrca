@@ -16,172 +16,172 @@ use tracing::trace;
 // Index 0 is unused; indices 1–255 map to common protocol strings.
 
 const SINGLE_BYTE_TOKENS: &[&str] = &[
-    "",                  // 0 — unused / list-empty sentinel
-    "xmlstreamend",      // 1
-    "xmlstreamstart",    // 2
-    "s.whatsapp.net",    // 3
-    "type",              // 4
-    "participant",       // 5
-    "from",              // 6
-    "to",                // 7
-    "fallback_hostname", // 8
-    "media",             // 9
-    "notification",      // 10
-    "0",                 // 11
-    "1",                 // 12
-    "ag",                // 13
-    "message",           // 14
-    "body",              // 15
-    "response",          // 16
-    "action",            // 17
-    "list",              // 18
-    "set",               // 19
-    "delete",            // 20
-    "urn:xmpp:whatsapp:push",  // 21
-    "result",            // 22
-    "groups_v2",         // 23
-    "image",             // 24
-    "count",             // 25
-    "jid",               // 26
-    "id",                // 27
-    "g.us",              // 28
-    "status",            // 29
-    "subject",           // 30
-    "broadcast",         // 31
-    "success",           // 32
-    "receipt",           // 33
-    "error",             // 34
-    "text",              // 35
-    "ack",               // 36
-    "category",          // 37
-    "reason",            // 38
-    "creation",          // 39
-    "epoch",             // 40
-    "relay",             // 41
-    "value",             // 42
-    "read",              // 43
-    "call",              // 44
-    "code",              // 45
-    "query",             // 46
-    "picture",           // 47
-    "audio",             // 48
-    "played",            // 49
-    "last",              // 50
-    "offer",             // 51
-    "user",              // 52
-    "enable",            // 53
-    "critical_unblock_low",  // 54
-    "accept",            // 55
-    "ib",                // 56
-    "timeout",           // 57
-    "devices",           // 58
-    "after",             // 59
-    "props",             // 60
-    "true",              // 61
-    "false",             // 62
-    "contact",           // 63
-    "get",               // 64
-    "order",             // 65
-    "linked_devices_ts", // 66
-    "encrypt",           // 67
-    "key",               // 68
-    "none",              // 69
-    "identity",          // 70
-    "all",               // 71
-    "group",             // 72
-    "item",              // 73
-    "item_count",        // 74
-    "video",             // 75
-    "priority",          // 76
-    "server-error",      // 77
-    "w:gp2",             // 78
-    "available",         // 79
-    "admin",             // 80
-    "owner",             // 81
-    "mute",              // 82
-    "create",            // 83
-    "revoke",            // 84
-    "encoding",          // 85
-    "chatstate",         // 86
-    "paused",            // 87
-    "composing",         // 88
-    "recording",         // 89
-    "hash",              // 90
-    "stanza",            // 91
-    "lidJid",            // 92
-    "pn",                // 93
-    "dirty",             // 94
-    "w:stats",           // 95
-    "device_hash",       // 96
-    "hostname",          // 97
-    "edit",              // 98
-    "2",                 // 99
-    "3",                 // 100
-    "subscribe",         // 101
-    "w:web",             // 102
-    "offline",           // 103
-    "preview",           // 104
-    "w:profile:picture", // 105
-    "add",               // 106
-    "remove",            // 107
-    "demote",            // 108
-    "promote",           // 109
-    "ts",                // 110
-    "reg_push",          // 111
-    "config",            // 112
-    "features",          // 113
-    "web",               // 114
-    "primary",           // 115
-    "w:m",               // 116
-    "voip",              // 117
-    "display",           // 118
-    "dc",                // 119
-    "t",                 // 120
-    "resource",          // 121
-    "batch",             // 122
-    "update",            // 123
-    "msg",               // 124
-    "device-list",       // 125
-    "resume",            // 126
-    "description",       // 127
-    "business_hours",    // 128
-    "categories",        // 129
-    "delivery",          // 130
-    "modify",            // 131
-    "disappearing_mode", // 132
-    "usync",             // 133
-    "notice",            // 134
-    "protocol",          // 135
-    "v",                 // 136
-    "lid",               // 137
-    "not-found",         // 138
-    "dns",               // 139
-    "verified_name",     // 140
-    "contact_remove",    // 141
-    "profile",           // 142
-    "side_list",         // 143
-    "active",            // 144
-    "passive",           // 145
-    "terminate",         // 146
-    "member_add_mode",   // 147
-    "membership_approval_mode", // 148
-    "locale",            // 149
+    "",                                 // 0 — unused / list-empty sentinel
+    "xmlstreamend",                     // 1
+    "xmlstreamstart",                   // 2
+    "s.whatsapp.net",                   // 3
+    "type",                             // 4
+    "participant",                      // 5
+    "from",                             // 6
+    "to",                               // 7
+    "fallback_hostname",                // 8
+    "media",                            // 9
+    "notification",                     // 10
+    "0",                                // 11
+    "1",                                // 12
+    "ag",                               // 13
+    "message",                          // 14
+    "body",                             // 15
+    "response",                         // 16
+    "action",                           // 17
+    "list",                             // 18
+    "set",                              // 19
+    "delete",                           // 20
+    "urn:xmpp:whatsapp:push",           // 21
+    "result",                           // 22
+    "groups_v2",                        // 23
+    "image",                            // 24
+    "count",                            // 25
+    "jid",                              // 26
+    "id",                               // 27
+    "g.us",                             // 28
+    "status",                           // 29
+    "subject",                          // 30
+    "broadcast",                        // 31
+    "success",                          // 32
+    "receipt",                          // 33
+    "error",                            // 34
+    "text",                             // 35
+    "ack",                              // 36
+    "category",                         // 37
+    "reason",                           // 38
+    "creation",                         // 39
+    "epoch",                            // 40
+    "relay",                            // 41
+    "value",                            // 42
+    "read",                             // 43
+    "call",                             // 44
+    "code",                             // 45
+    "query",                            // 46
+    "picture",                          // 47
+    "audio",                            // 48
+    "played",                           // 49
+    "last",                             // 50
+    "offer",                            // 51
+    "user",                             // 52
+    "enable",                           // 53
+    "critical_unblock_low",             // 54
+    "accept",                           // 55
+    "ib",                               // 56
+    "timeout",                          // 57
+    "devices",                          // 58
+    "after",                            // 59
+    "props",                            // 60
+    "true",                             // 61
+    "false",                            // 62
+    "contact",                          // 63
+    "get",                              // 64
+    "order",                            // 65
+    "linked_devices_ts",                // 66
+    "encrypt",                          // 67
+    "key",                              // 68
+    "none",                             // 69
+    "identity",                         // 70
+    "all",                              // 71
+    "group",                            // 72
+    "item",                             // 73
+    "item_count",                       // 74
+    "video",                            // 75
+    "priority",                         // 76
+    "server-error",                     // 77
+    "w:gp2",                            // 78
+    "available",                        // 79
+    "admin",                            // 80
+    "owner",                            // 81
+    "mute",                             // 82
+    "create",                           // 83
+    "revoke",                           // 84
+    "encoding",                         // 85
+    "chatstate",                        // 86
+    "paused",                           // 87
+    "composing",                        // 88
+    "recording",                        // 89
+    "hash",                             // 90
+    "stanza",                           // 91
+    "lidJid",                           // 92
+    "pn",                               // 93
+    "dirty",                            // 94
+    "w:stats",                          // 95
+    "device_hash",                      // 96
+    "hostname",                         // 97
+    "edit",                             // 98
+    "2",                                // 99
+    "3",                                // 100
+    "subscribe",                        // 101
+    "w:web",                            // 102
+    "offline",                          // 103
+    "preview",                          // 104
+    "w:profile:picture",                // 105
+    "add",                              // 106
+    "remove",                           // 107
+    "demote",                           // 108
+    "promote",                          // 109
+    "ts",                               // 110
+    "reg_push",                         // 111
+    "config",                           // 112
+    "features",                         // 113
+    "web",                              // 114
+    "primary",                          // 115
+    "w:m",                              // 116
+    "voip",                             // 117
+    "display",                          // 118
+    "dc",                               // 119
+    "t",                                // 120
+    "resource",                         // 121
+    "batch",                            // 122
+    "update",                           // 123
+    "msg",                              // 124
+    "device-list",                      // 125
+    "resume",                           // 126
+    "description",                      // 127
+    "business_hours",                   // 128
+    "categories",                       // 129
+    "delivery",                         // 130
+    "modify",                           // 131
+    "disappearing_mode",                // 132
+    "usync",                            // 133
+    "notice",                           // 134
+    "protocol",                         // 135
+    "v",                                // 136
+    "lid",                              // 137
+    "not-found",                        // 138
+    "dns",                              // 139
+    "verified_name",                    // 140
+    "contact_remove",                   // 141
+    "profile",                          // 142
+    "side_list",                        // 143
+    "active",                           // 144
+    "passive",                          // 145
+    "terminate",                        // 146
+    "member_add_mode",                  // 147
+    "membership_approval_mode",         // 148
+    "locale",                           // 149
     "default_membership_approval_mode", // 150
-    "chat",              // 151
-    "presence",          // 152
-    "tag",               // 153
-    "link_code_companion_reg", // 154
-    "companion_identity_class", // 155
-    "edge_routing",      // 156
-    "routing_info",      // 157
-    "hi",                // 158
-    "4",                 // 159
-    "5",                 // 160
-    "6",                 // 161
-    "7",                 // 162
-    "8",                 // 163
-    "9",                 // 164
-    "10",                // 165
+    "chat",                             // 151
+    "presence",                         // 152
+    "tag",                              // 153
+    "link_code_companion_reg",          // 154
+    "companion_identity_class",         // 155
+    "edge_routing",                     // 156
+    "routing_info",                     // 157
+    "hi",                               // 158
+    "4",                                // 159
+    "5",                                // 160
+    "6",                                // 161
+    "7",                                // 162
+    "8",                                // 163
+    "9",                                // 164
+    "10",                               // 165
 ];
 
 // Build a reverse lookup: string → token index.
@@ -299,11 +299,7 @@ pub fn encode(node: &WaNode) -> crate::Result<Vec<u8>> {
     Ok(framed)
 }
 
-fn encode_node(
-    buf: &mut Vec<u8>,
-    node: &WaNode,
-    tokens: &HashMap<&str, u8>,
-) -> crate::Result<()> {
+fn encode_node(buf: &mut Vec<u8>, node: &WaNode, tokens: &HashMap<&str, u8>) -> crate::Result<()> {
     // A node is encoded as a list: [tag, attrs..., content]
     // List size = 1 (tag) + 2*num_attrs + has_content
     let num_attrs = node.attrs.len();
@@ -355,11 +351,7 @@ fn write_list_start(buf: &mut Vec<u8>, size: usize) {
     }
 }
 
-fn write_string(
-    buf: &mut Vec<u8>,
-    s: &str,
-    tokens: &HashMap<&str, u8>,
-) -> crate::Result<()> {
+fn write_string(buf: &mut Vec<u8>, s: &str, tokens: &HashMap<&str, u8>) -> crate::Result<()> {
     // Check if the string is a known token.
     if let Some(&idx) = tokens.get(s) {
         buf.push(idx);
@@ -413,8 +405,7 @@ pub fn decode(data: &[u8]) -> crate::Result<WaNode> {
         return Err(crate::Error::Binary("frame too short".into()));
     }
     let _flags = data[0];
-    let len =
-        ((data[1] as usize) << 16) | ((data[2] as usize) << 8) | (data[3] as usize);
+    let len = ((data[1] as usize) << 16) | ((data[2] as usize) << 8) | (data[3] as usize);
     if data.len() < 4 + len {
         return Err(crate::Error::Binary(format!(
             "frame truncated: expected {} bytes, got {}",
@@ -506,12 +497,14 @@ fn decode_node(c: &mut Cursor<'_>) -> crate::Result<WaNode> {
 fn read_list_size(c: &mut Cursor<'_>) -> crate::Result<usize> {
     let tag = c.read_u8()?;
     match tag {
-        0x00 => Ok(0),       // LIST_EMPTY
-        0xF8 => {            // LIST_8
+        0x00 => Ok(0), // LIST_EMPTY
+        0xF8 => {
+            // LIST_8
             let size = c.read_u8()? as usize;
             Ok(size)
         }
-        0xF9 => {            // LIST_16
+        0xF9 => {
+            // LIST_16
             let size = c.read_u16()? as usize;
             Ok(size)
         }
@@ -526,10 +519,7 @@ fn read_string(c: &mut Cursor<'_>) -> crate::Result<String> {
     match tag {
         // Token index (single byte) — look up in dictionary.
         1..=165 => {
-            let s = SINGLE_BYTE_TOKENS
-                .get(tag as usize)
-                .copied()
-                .unwrap_or("");
+            let s = SINGLE_BYTE_TOKENS.get(tag as usize).copied().unwrap_or("");
             Ok(s.to_string())
         }
         // BINARY_8: 1-byte length + raw bytes.
