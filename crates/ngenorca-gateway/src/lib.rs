@@ -123,6 +123,226 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
     // Each adapter's start_listening() is spawned as an independent task.
     app_state.plugins().start_all_adapters().await;
 
+    // ── Inbound message worker ───────────────────────────────────────
+    //
+    // Subscribes to the EventBus and processes inbound messages from
+    // channel adapters through the same orchestration pipeline used by
+    // the HTTP /api/v1/chat endpoint.  Replies are routed back to the
+    // originating adapter via `PluginRegistry::route_to_adapter()`.
+    {
+        let state = app_state.clone();
+        let mut rx = state.event_bus().subscribe();
+        tokio::spawn(async move {
+            loop {
+                let event = match rx.recv().await {
+                    Ok(e) => e,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "Inbound worker lagged — some events dropped");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("Event bus closed — inbound worker shutting down");
+                        break;
+                    }
+                };
+
+                // Only process inbound messages from channel adapters.
+                let msg = match &event.payload {
+                    ngenorca_core::event::EventPayload::Message(m)
+                        if m.direction == ngenorca_core::message::Direction::Inbound =>
+                    {
+                        m.clone()
+                    }
+                    _ => continue,
+                };
+
+                // Extract text content (skip non-text messages for now).
+                let text = match &msg.content {
+                    ngenorca_core::message::Content::Text(t) => t.clone(),
+                    ngenorca_core::message::Content::Image { caption: Some(c), .. } => c.clone(),
+                    ngenorca_core::message::Content::Audio { transcript: Some(t), .. } => t.clone(),
+                    _ => {
+                        tracing::debug!(channel = %msg.channel_kind, "Skipping non-text inbound message");
+                        continue;
+                    }
+                };
+
+                let channel_kind_str = msg.channel_kind.to_string();
+                let user_id = msg.user_id.clone();
+
+                tracing::info!(
+                    channel = %channel_kind_str,
+                    user = ?user_id,
+                    len = text.len(),
+                    "Processing inbound channel message"
+                );
+
+                // Get or create session for this user + channel.
+                let session_id = match state.sessions().get_or_create(
+                    user_id.as_ref(),
+                    &channel_kind_str,
+                ) {
+                    Ok(sid) => sid,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to create session for inbound message");
+                        continue;
+                    }
+                };
+
+                // Build memory context.
+                let memory_ctx = if state.config().memory.enabled {
+                    if let Some(ref uid) = user_id {
+                        let budget = state.config().memory.semantic_token_budget;
+                        state.memory().build_context(uid, &session_id, &text, budget).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Store user message in working memory.
+                state.memory().working.push(
+                    &session_id,
+                    ngenorca_memory::working::WorkingMessage {
+                        role: "user".into(),
+                        content: text.clone(),
+                        timestamp: chrono::Utc::now(),
+                        estimated_tokens: text.len() / 4,
+                    },
+                );
+
+                // Build conversation from working memory.
+                let conversation: Vec<ngenorca_plugin_sdk::ChatMessage> = state
+                    .memory()
+                    .working
+                    .get_session(&session_id)
+                    .into_iter()
+                    .map(|wm| ngenorca_plugin_sdk::ChatMessage {
+                        role: wm.role.clone(),
+                        content: wm.content.clone(),
+                    })
+                    .collect();
+
+                // Orchestrate.
+                let orch = orchestration::HybridOrchestrator::new(
+                    std::sync::Arc::new(state.config().clone()),
+                );
+                match orch
+                    .process(
+                        &text,
+                        &conversation,
+                        state.providers(),
+                        Some(state.plugins()),
+                        memory_ctx.as_ref(),
+                    )
+                    .await
+                {
+                    Ok((response, record)) => {
+                        state.metrics().inc_orchestrations();
+                        state.metrics().add_tokens(response.total_usage.total_tokens as u64);
+                        if response.escalated {
+                            state.metrics().inc_escalations();
+                        }
+
+                        // Ingest learned routing rule.
+                        if let Err(e) = state.learned_router().ingest(&record) {
+                            tracing::warn!(error = %e, "Failed to ingest learned routing rule");
+                        }
+
+                        // Store assistant response in working memory.
+                        state.memory().working.push(
+                            &session_id,
+                            ngenorca_memory::working::WorkingMessage {
+                                role: "assistant".into(),
+                                content: response.content.clone(),
+                                timestamp: chrono::Utc::now(),
+                                estimated_tokens: response.content.len() / 4,
+                            },
+                        );
+
+                        // Update session.
+                        let _ = state.sessions().record_message(
+                            &session_id,
+                            response.total_usage.total_tokens,
+                        );
+
+                        // Store in episodic memory.
+                        if let Some(ref uid) = user_id {
+                            let entry = ngenorca_memory::episodic::EpisodicEntry {
+                                id: 0,
+                                user_id: uid.0.clone(),
+                                content: format!(
+                                    "User: {}\nAssistant: {}",
+                                    text, response.content
+                                ),
+                                summary: None,
+                                channel: channel_kind_str.clone(),
+                                timestamp: chrono::Utc::now(),
+                                embedding: None,
+                                relevance_score: 0.0,
+                            };
+                            if let Err(e) = state.memory().episodic.store(&entry) {
+                                tracing::warn!(error = %e, "Failed to store episodic memory");
+                            }
+                        }
+
+                        // Build the reply Message and route it to the adapter.
+                        let reply = ngenorca_core::message::Message {
+                            id: ngenorca_core::types::EventId::new(),
+                            timestamp: chrono::Utc::now(),
+                            user_id: user_id.clone(),
+                            trust: ngenorca_core::types::TrustLevel::Unknown,
+                            session_id: session_id.clone(),
+                            channel: msg.channel.clone(),
+                            channel_kind: msg.channel_kind.clone(),
+                            direction: ngenorca_core::message::Direction::Outbound,
+                            content: ngenorca_core::message::Content::Text(
+                                response.content.clone(),
+                            ),
+                            metadata: serde_json::Value::Null,
+                        };
+
+                        if let Err(e) = state
+                            .plugins()
+                            .route_to_adapter(&channel_kind_str, &reply)
+                            .await
+                        {
+                            tracing::error!(
+                                channel = %channel_kind_str,
+                                error = %e,
+                                "Failed to route reply to adapter"
+                            );
+                        }
+
+                        // Publish orchestration event for analytics.
+                        let orch_event = ngenorca_core::event::Event {
+                            id: ngenorca_core::types::EventId::new(),
+                            timestamp: chrono::Utc::now(),
+                            session_id: Some(session_id),
+                            user_id,
+                            payload: ngenorca_core::event::EventPayload::OrchestrationCompleted(
+                                record,
+                            ),
+                        };
+                        if let Err(e) = state.event_bus().publish(orch_event).await {
+                            tracing::warn!(error = %e, "Failed to publish orchestration record");
+                        }
+                    }
+                    Err(e) => {
+                        state.metrics().inc_channel_errors();
+                        tracing::error!(
+                            channel = %channel_kind_str,
+                            error = %e,
+                            "Inbound message orchestration failed"
+                        );
+                    }
+                }
+            }
+        });
+        info!("Inbound message worker started");
+    }
+
     // Spawn background memory consolidation task.
     {
         let state = app_state.clone();

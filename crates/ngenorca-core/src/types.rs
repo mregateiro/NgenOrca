@@ -56,6 +56,24 @@ pub enum ChannelKind {
     Custom(String),
 }
 
+impl std::fmt::Display for ChannelKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WhatsApp => write!(f, "whatsapp"),
+            Self::Telegram => write!(f, "telegram"),
+            Self::Discord => write!(f, "discord"),
+            Self::Slack => write!(f, "slack"),
+            Self::Signal => write!(f, "signal"),
+            Self::IMessage => write!(f, "imessage"),
+            Self::Matrix => write!(f, "matrix"),
+            Self::IRC => write!(f, "irc"),
+            Self::WebChat => write!(f, "webchat"),
+            Self::Teams => write!(f, "teams"),
+            Self::Custom(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 impl SessionId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
