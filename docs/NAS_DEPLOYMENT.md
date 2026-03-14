@@ -56,7 +56,9 @@ docker network create proxy
 
 If nginx or Authelia use a different external Docker network name, replace `proxy` everywhere in this guide and in [docker-compose.nas.yml](../docker-compose.nas.yml).
 
-## Step 1: Clone and Configure
+## Workflow 1: New installation
+
+### Step 1: Clone and configure
 
 ```bash
 # On your NAS, via SSH or terminal
@@ -94,7 +96,7 @@ Notes:
 - For a NAT-only NAS setup, **do not add a Telegram webhook URL**. The NAS compose file already forces Telegram polling mode.
 - The NAS compose file bootstraps `TrustedProxy` via environment variables so the `/config` page is still protected by Authelia before `config.toml` exists.
 
-## Step 2: nginx Configuration
+### Step 2: nginx configuration
 
 Copy the provided nginx config:
 
@@ -128,7 +130,7 @@ docker exec nginx nginx -s reload
 
 If your nginx container is not literally named `nginx`, use its real container name instead.
 
-## Step 3: Authelia Access Rule
+### Step 3: Authelia access rule
 
 Add NgenOrca to your Authelia `configuration.yml`:
 
@@ -149,7 +151,7 @@ Restart Authelia:
 docker restart authelia
 ```
 
-## Step 4: Start NgenOrca
+### Step 4: Start NgenOrca
 
 ```bash
 # Run this from the cloned repo root (the folder that contains docker-compose.nas.yml)
@@ -179,7 +181,7 @@ Why three different checks?
 - `http://ngenorca:18789` works only for containers on the same Docker network.
 - `https://ngenorca.nas.local` is the check you use from your WireGuard-connected client devices.
 
-## Step 5: Verify Authentication Flow
+### Step 5: Verify authentication flow
 
 From your phone or laptop (connected via WireGuard):
 
@@ -307,9 +309,36 @@ curl https://ngenorca.nas.local/api/v1/channels
 docker compose -f docker-compose.nas.yml restart
 
 # Update
-git pull
-docker compose -f docker-compose.nas.yml up -d --build
+./scripts/update.sh nas
 ```
+
+PowerShell:
+
+```powershell
+.\scripts\update.ps1 nas
+```
+
+## Workflow 2: Update existing installation
+
+From the existing `ngenorca` repo folder on the NAS:
+
+```bash
+./scripts/update.sh nas
+```
+
+PowerShell:
+
+```powershell
+.\scripts\update.ps1 nas
+```
+
+What this does:
+
+1. fetches the latest changes from GitHub
+2. updates your local `master` branch
+3. rebuilds and redeploys the NAS stack
+
+Use this workflow for normal upgrades. Re-cloning is only for the first deploy.
 
 ## Troubleshooting
 

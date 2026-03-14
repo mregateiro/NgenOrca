@@ -16,14 +16,16 @@ If you also set `NGENORCA_*` environment variables in compose, they still overri
 
 ---
 
-## Step 1: Clone the repository
+## Workflow 1: New installation
+
+### Step 1: Clone the repository
 
 ```bash
 git clone https://github.com/mregateiro/NgenOrca.git ngenorca
 cd ngenorca
 ```
 
-## Step 2: Start the stack
+### Step 2: Start the stack
 
 ```bash
 docker compose up -d
@@ -34,7 +36,7 @@ This creates two persistent Docker volumes:
 - `ngenorca-data` → databases, memory, learned routes
 - `ngenorca-config` → the editable `config.toml`
 
-## Step 3: Open the config UI
+### Step 3: Open the config UI
 
 Open:
 
@@ -44,7 +46,7 @@ http://localhost:18789/config
 
 On first run, if no config file exists yet, the page pre-fills the editor with the current runtime config so you can save it as your starting point.
 
-## Step 4: Paste your config
+### Step 4: Paste your config
 
 ### Cloud provider example
 
@@ -74,7 +76,7 @@ enabled = true
 
 On Linux, replace `host.docker.internal` with your host IP or add an `extra_hosts` entry.
 
-## Step 5: Save and restart
+### Step 5: Save and restart
 
 After clicking **Save config** in the browser UI, restart NgenOrca so it reloads the file:
 
@@ -82,7 +84,7 @@ After clicking **Save config** in the browser UI, restart NgenOrca so it reloads
 docker restart ngenorca
 ```
 
-## Step 6: Verify it works
+### Step 6: Verify it works
 
 ```bash
 curl http://localhost:18789/health
@@ -90,7 +92,7 @@ curl http://localhost:18789/api/v1/status
 curl http://localhost:18789/api/v1/providers
 ```
 
-## Step 7: Send your first message
+### Step 7: Send your first message
 
 ```bash
 curl -s -X POST http://localhost:18789/api/v1/chat \
@@ -117,10 +119,29 @@ docker logs -f ngenorca
 
 ### Update to a new version
 
+You do **not** need to delete the repo folder and clone again.
+
+## Workflow 2: Update existing installation
+
+From the existing `ngenorca` repo folder:
+
 ```bash
-git pull
-docker compose up -d --build
+./scripts/update.sh docker
 ```
+
+PowerShell:
+
+```powershell
+.\scripts\update.ps1 docker
+```
+
+What this does:
+
+1. fetches the latest changes from GitHub
+2. updates your local `master` branch
+3. rebuilds and redeploys the Docker stack
+
+Use this workflow for normal upgrades. Re-cloning is only for the very first install.
 
 ### Rebuild from scratch
 

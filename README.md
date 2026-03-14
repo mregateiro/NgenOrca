@@ -68,6 +68,8 @@ Command execution is workspace-scoped and marked as sandbox-requiring in the too
 
 ### Native (recommended)
 
+#### New installation
+
 ```bash
 git clone https://github.com/mregateiro/NgenOrca.git
 cd ngenorca
@@ -75,25 +77,69 @@ cargo build --release
 ./target/release/ngenorca gateway
 ```
 
-### Docker
+#### Update existing installation
 
 ```bash
+./scripts/update.sh cargo
+```
+
+PowerShell:
+
+```powershell
+.\scripts\update.ps1 cargo
+```
+
+### Docker
+
+#### New installation
+
+```bash
+git clone https://github.com/mregateiro/NgenOrca.git ngenorca
+cd ngenorca
 docker compose up -d
 ```
 
 Then open the built-in `/config` page at `http://localhost:18789/config`, save your persistent runtime config, and restart the container.
+
+#### Update existing installation
+
+```bash
+./scripts/update.sh docker
+```
+
+PowerShell:
+
+```powershell
+.\scripts\update.ps1 docker
+```
 
 See [docs/DOCKER.md](docs/DOCKER.md) for the full step-by-step guide (config, Ollama, auth, troubleshooting).
 Using Portainer? See [docs/PORTAINER.md](docs/PORTAINER.md) for the web-UI walkthrough.
 
 ### NAS / Homelab (with Authelia + nginx)
 
+#### New installation
+
 ```bash
+git clone https://github.com/mregateiro/NgenOrca.git ngenorca
+cd ngenorca
 # Copy deploy/nginx/ngenorca.conf to your nginx config
 docker compose -f docker-compose.nas.yml up -d
 ```
 
 Then open the built-in `/config` page at `https://ngenorca.nas.local/config`, save your config, and restart the service.
+
+#### Update existing installation
+
+```bash
+./scripts/update.sh nas
+```
+
+PowerShell:
+
+```powershell
+.\scripts\update.ps1 nas
+```
 
 See [docs/NAS_DEPLOYMENT.md](docs/NAS_DEPLOYMENT.md) for the full guide.
 
