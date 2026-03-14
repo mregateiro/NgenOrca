@@ -271,6 +271,10 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub openrouter: Option<OpenRouterProviderConfig>,
 
+    /// Kilo Gateway provider.
+    #[serde(default, alias = "kilocode")]
+    pub kilo: Option<KiloProviderConfig>,
+
     /// Custom / self-hosted OpenAI-compatible provider.
     #[serde(default)]
     pub custom: Option<CustomProviderConfig>,
@@ -387,6 +391,17 @@ pub struct OpenRouterProviderConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct KiloProviderConfig {
+    /// Kilo Gateway API key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Base URL (default: https://api.kilo.ai/api/gateway).
+    #[serde(default = "default_kilo_url")]
+    pub base_url: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CustomProviderConfig {
     /// Base URL for any OpenAI-compatible API (vLLM, LM Studio, LocalAI, etc.).
     pub base_url: String,
@@ -453,6 +468,15 @@ impl std::fmt::Debug for OpenRouterProviderConfig {
             .field("base_url", &self.base_url)
             .field("site_name", &self.site_name)
             .field("fallback_models", &self.fallback_models)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for KiloProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KiloProviderConfig")
+            .field("api_key", &redact_option(&self.api_key))
+            .field("base_url", &self.base_url)
             .finish()
     }
 }
@@ -1091,6 +1115,9 @@ fn default_google_url() -> String {
 }
 fn default_openrouter_url() -> String {
     "https://openrouter.ai/api/v1".into()
+}
+fn default_kilo_url() -> String {
+    "https://api.kilo.ai/api/gateway".into()
 }
 fn default_classifier_confidence() -> f64 {
     0.8
@@ -1744,6 +1771,24 @@ mod tests {
         let (provider, model) = cfg.parse_model();
         assert_eq!(provider, "custom");
         assert_eq!(model, "gpt-4o");
+    }
+
+    #[test]
+    fn providers_kilocode_alias_deserializes_to_kilo() {
+        let cfg: NgenOrcaConfig = toml::from_str(
+            r#"
+                [agent]
+                model = "kilo/anthropic/claude-sonnet-4.5"
+
+                [agent.providers.kilocode]
+                api_key = "kgw_test"
+            "#,
+        )
+        .unwrap();
+
+        let kilo = cfg.agent.providers.kilo.expect("kilo config should deserialize");
+        assert_eq!(kilo.api_key.as_deref(), Some("kgw_test"));
+        assert_eq!(kilo.base_url, "https://api.kilo.ai/api/gateway");
     }
 
     #[test]

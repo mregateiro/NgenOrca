@@ -23,6 +23,13 @@ pub struct ProviderRegistry {
     default_provider: String,
 }
 
+fn canonical_provider_name(name: &str) -> &str {
+    match name {
+        "kilocode" => "kilo",
+        _ => name,
+    }
+}
+
 impl ProviderRegistry {
     /// Build the registry from the application config.
     /// Each configured provider gets instantiated.
@@ -132,6 +139,20 @@ impl ProviderRegistry {
             info!("Registered provider: openrouter ({})", or_cfg.base_url);
         }
 
+        // ── Kilo Gateway ──
+        if let Some(ref kilo_cfg) = config.agent.providers.kilo
+            && let Some(ref api_key) = kilo_cfg.api_key
+        {
+            let provider = Arc::new(OpenAICompatProvider::new(
+                &kilo_cfg.base_url,
+                Some(api_key.clone()),
+                None,
+                "kilo",
+            ));
+            providers.insert("kilo".into(), provider);
+            info!("Registered provider: kilo ({})", kilo_cfg.base_url);
+        }
+
         // ── Custom ──
         if let Some(ref custom_cfg) = config.agent.providers.custom {
             let provider = Arc::new(OpenAICompatProvider::new(
@@ -158,21 +179,23 @@ impl ProviderRegistry {
 
         Self {
             providers,
-            default_provider: default_provider.to_string(),
+            default_provider: canonical_provider_name(default_provider).to_string(),
         }
     }
 
     /// Get a provider by name (e.g., "ollama", "anthropic", "openai").
     pub fn get(&self, name: &str) -> Option<Arc<dyn ModelProvider>> {
-        self.providers.get(name).cloned()
+        self.providers.get(canonical_provider_name(name)).cloned()
     }
 
     /// Resolve a model string like "anthropic/claude-sonnet-4" to the correct provider.
     pub fn resolve(&self, model: &str) -> Result<Arc<dyn ModelProvider>> {
-        let provider_name = model
+        let provider_name = canonical_provider_name(
+            model
             .split_once('/')
             .map(|(p, _)| p)
-            .unwrap_or(&self.default_provider);
+            .unwrap_or(&self.default_provider),
+        );
 
         self.providers.get(provider_name).cloned().ok_or_else(|| {
             Error::Gateway(format!(
@@ -288,5 +311,30 @@ mod tests {
         });
         let registry = ProviderRegistry::from_config(&config);
         assert!(registry.get("anthropic").is_none());
+    }
+
+    #[test]
+    fn with_kilo_config_registers_provider() {
+        let mut config = NgenOrcaConfig::default();
+        config.agent.providers.kilo = Some(ngenorca_config::KiloProviderConfig {
+            api_key: Some("kgw-test".into()),
+            base_url: "https://api.kilo.ai/api/gateway".into(),
+        });
+
+        let registry = ProviderRegistry::from_config(&config);
+        assert!(registry.get("kilo").is_some());
+    }
+
+    #[test]
+    fn kilocode_alias_resolves_to_kilo_provider() {
+        let mut config = NgenOrcaConfig::default();
+        config.agent.providers.kilo = Some(ngenorca_config::KiloProviderConfig {
+            api_key: Some("kgw-test".into()),
+            base_url: "https://api.kilo.ai/api/gateway".into(),
+        });
+
+        let registry = ProviderRegistry::from_config(&config);
+        let provider = registry.resolve("kilocode/anthropic/claude-sonnet-4.5").unwrap();
+        assert_eq!(provider.provider_name(), "kilo");
     }
 }

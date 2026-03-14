@@ -14,6 +14,7 @@ This guide walks you through every section of NgenOrca's configuration system â€
    - [Azure OpenAI](#azure-openai)
    - [Google Gemini](#google-gemini)
    - [OpenRouter (Multi-Provider)](#openrouter-multi-provider)
+    - [Kilo Gateway](#kilo-gateway)
    - [Custom / Self-Hosted](#custom--self-hosted)
 3. [Connecting Channels](#connecting-channels)
    - [WebChat (Built-in)](#webchat-built-in)
@@ -220,6 +221,27 @@ api_key = "sk-or-v1-..."
 > **Where to get your key:** [openrouter.ai/keys](https://openrouter.ai/keys)
 >
 > **Why use this?** One API key for 200+ models, automatic failover, unified billing.
+
+---
+
+### Kilo Gateway
+
+Kilo Gateway exposes an OpenAI-compatible API for hundreds of models behind one endpoint:
+
+```toml
+[agent]
+model = "kilo/anthropic/claude-sonnet-4.5"
+
+[agent.providers.kilo]
+api_key = "kgw_..."
+# base_url = "https://api.kilo.ai/api/gateway"   # default
+```
+
+You can also use the legacy provider alias `kilocode/...`, but `kilo/...` is the canonical form.
+
+> **Where to get your key:** [app.kilo.ai](https://app.kilo.ai)
+>
+> **Why use this?** One Kilo key for many upstream providers, with an OpenAI-compatible `/chat/completions` API.
 
 ---
 

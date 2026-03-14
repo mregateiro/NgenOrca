@@ -157,6 +157,12 @@ model = "anthropic/claude-sonnet-4-20250514"
 # site_name = "NgenOrca"
 # fallback_models = ["openrouter/openai/gpt-4o", "openrouter/google/gemini-2.0-flash"]
 
+# Kilo Gateway (OpenAI-compatible unified gateway)
+# Model format example: kilo/anthropic/claude-sonnet-4.5
+# [agent.providers.kilo]
+# api_key = "kgw_..."
+# base_url = "https://api.kilo.ai/api/gateway"
+
 # Custom / self-hosted (vLLM, LM Studio, LocalAI, etc.)
 # [agent.providers.custom]
 # base_url = "http://192.168.1.100:8080/v1"

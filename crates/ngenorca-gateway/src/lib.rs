@@ -21,6 +21,7 @@ pub mod routes;
 pub mod server;
 pub mod sessions;
 pub mod state;
+pub mod tools;
 
 use ngenorca_bus::EventBus;
 use ngenorca_config::NgenOrcaConfig;
@@ -76,6 +77,10 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
     std::fs::create_dir_all(&plugin_dir).ok();
     let plugin_registry = PluginRegistry::new(plugin_tx, plugin_dir);
     info!("Plugin registry initialized");
+
+    // Register built-in agent tools.
+    tools::register_builtin_tools(&plugin_registry, &config).await;
+    info!(tool_count = plugin_registry.tool_count().await, "Built-in tools registered");
 
     // Spawn a bridge task: events emitted by plugins are forwarded to the bus.
     {

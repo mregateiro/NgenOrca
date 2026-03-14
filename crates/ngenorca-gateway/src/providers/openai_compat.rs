@@ -244,6 +244,8 @@ impl ModelProvider for OpenAICompatProvider {
             .model
             .strip_prefix("openai/")
             .or_else(|| request.model.strip_prefix("openrouter/"))
+            .or_else(|| request.model.strip_prefix("kilo/"))
+            .or_else(|| request.model.strip_prefix("kilocode/"))
             .or_else(|| request.model.strip_prefix("azure/"))
             .or_else(|| request.model.strip_prefix("custom/"))
             .unwrap_or(&request.model)
@@ -392,6 +394,8 @@ mod tests {
         for (input, expected) in [
             ("openai/gpt-4o", "gpt-4o"),
             ("openrouter/meta-llama/llama-3", "meta-llama/llama-3"),
+            ("kilo/anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+            ("kilocode/openai/gpt-5", "openai/gpt-5"),
             ("azure/gpt-4", "gpt-4"),
             ("custom/my-model", "my-model"),
             ("gpt-4o", "gpt-4o"),
@@ -399,6 +403,8 @@ mod tests {
             let stripped = input
                 .strip_prefix("openai/")
                 .or_else(|| input.strip_prefix("openrouter/"))
+                .or_else(|| input.strip_prefix("kilo/"))
+                .or_else(|| input.strip_prefix("kilocode/"))
                 .or_else(|| input.strip_prefix("azure/"))
                 .or_else(|| input.strip_prefix("custom/"))
                 .unwrap_or(input);

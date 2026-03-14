@@ -30,6 +30,7 @@ Connect to any major provider — or run fully local with Ollama:
 | **Azure OpenAI** | `azure/my-deployment` | No |
 | **Google Gemini** | `google/gemini-2.0-flash` | No |
 | **OpenRouter** | `openrouter/anthropic/claude-sonnet-4` | No |
+| **Kilo Gateway** | `kilo/anthropic/claude-sonnet-4.5` | No |
 | **Custom** (vLLM, LM Studio) | `custom/my-model` | ✅ Yes |
 
 ## Channels
@@ -46,6 +47,22 @@ Talk to NgenOrca from anywhere — all channels resolve to one unified identity:
 | **Signal** | signal-cli daemon | No |
 | **Matrix** | Sync | No |
 | **Teams** | Webhook | Yes |
+
+## Built-in Agent Tools
+
+NgenOrca now includes first-party tools for common agent actions:
+
+| Tool | Purpose |
+|---|---|
+| `list_dir` | List files and folders in the configured workspace |
+| `read_file` | Read workspace files, including line ranges |
+| `write_file` | Create, overwrite, or append workspace files |
+| `grep_workspace` | Search text recursively in the workspace |
+| `fetch_url` | Fetch a web page or API URL |
+| `web_search` | Search the public web |
+| `run_command` | Run OS commands from the workspace |
+
+Command execution is workspace-scoped and marked as sandbox-requiring in the tool system.
 
 ## Quick Start
 

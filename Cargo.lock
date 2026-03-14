@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-bus"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "flume",
@@ -1527,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "figment",
  "ngenorca-core",
@@ -1560,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "serde",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-gateway"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-identity"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "chrono",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-memory"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "ngenorca-bus",
@@ -1648,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-plugin-sdk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-sandbox"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ngenorca-core",
  "serde",
@@ -1675,7 +1675,7 @@ dependencies = [
 
 [[package]]
 name = "ngenorca-whatsapp-web"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "aes-gcm",
