@@ -16,7 +16,7 @@ use std::sync::Arc;
 use ngenorca_core::Result;
 use ngenorca_core::event::Event;
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info};
 
 use event_log::EventLog;
 
@@ -56,7 +56,7 @@ impl EventBus {
 
         // 2. Broadcast to in-memory subscribers.
         if let Err(e) = self.inner.tx.send(event) {
-            warn!("No active subscribers for event: {}", e);
+            debug!("No active real-time subscribers for event: {}", e);
         }
 
         Ok(())
