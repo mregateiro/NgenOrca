@@ -18,14 +18,17 @@ pub mod providers;
 pub mod rate_limit;
 pub mod request_id;
 pub mod routes;
+pub(crate) mod runtime_identity;
 pub mod server;
 pub mod sessions;
+pub mod skills;
 pub mod state;
 pub mod tools;
 
 use ngenorca_bus::EventBus;
 use ngenorca_config::NgenOrcaConfig;
 use ngenorca_core::Result;
+use ngenorca_identity::resolver::IdentityAction;
 use ngenorca_identity::IdentityManager;
 use ngenorca_memory::MemoryManager;
 use plugins::PluginRegistry;
@@ -75,7 +78,7 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
     let (plugin_tx, mut plugin_rx) = tokio::sync::mpsc::unbounded_channel();
     let plugin_dir = config.data_dir.join("plugins");
     std::fs::create_dir_all(&plugin_dir).ok();
-    let plugin_registry = PluginRegistry::new(plugin_tx, plugin_dir);
+    let plugin_registry = PluginRegistry::new_with_sandbox(plugin_tx, plugin_dir, config.sandbox.enabled);
     info!("Plugin registry initialized");
 
     // Register built-in agent tools.
@@ -173,23 +176,101 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                 };
 
                 let channel_kind_str = msg.channel_kind.to_string();
-                let user_id = msg.user_id.clone();
+                let resolved_identity = runtime_identity::resolve_message_identity(state.identity(), &msg);
+                let identity_diagnostics = runtime_identity::describe_message_identity(&msg, &resolved_identity);
+                if matches!(resolved_identity.action, IdentityAction::Challenge | IdentityAction::Block)
+                {
+                    tracing::warn!(
+                        channel = %channel_kind_str,
+                        action = ?resolved_identity.action,
+                        user = ?resolved_identity.user_id,
+                        reason = %identity_diagnostics.reason,
+                        suggested_actions = ?identity_diagnostics.suggested_actions,
+                        "Skipping inbound message due to failed device verification"
+                    );
+                    continue;
+                }
+                if matches!(resolved_identity.action, IdentityAction::RequirePairing | IdentityAction::ProceedReduced)
+                {
+                    tracing::info!(
+                        channel = %channel_kind_str,
+                        action = ?resolved_identity.action,
+                        user = ?resolved_identity.user_id,
+                        reason = %identity_diagnostics.reason,
+                        suggested_actions = ?identity_diagnostics.suggested_actions,
+                        "Inbound message is proceeding with identity follow-up guidance"
+                    );
+                }
+                let user_id = resolved_identity.user_id.clone();
 
                 tracing::info!(
                     channel = %channel_kind_str,
                     user = ?user_id,
+                    trust = ?resolved_identity.trust,
                     len = text.len(),
                     "Processing inbound channel message"
                 );
 
                 // Get or create session for this user + channel.
-                let session_id = match state.sessions().get_or_create(
-                    user_id.as_ref(),
-                    &channel_kind_str,
-                ) {
-                    Ok(sid) => sid,
+                let session_id = if let (Some(alias_user), Some(canonical_user)) =
+                    (msg.user_id.as_ref(), user_id.as_ref())
+                {
+                    if alias_user != canonical_user {
+                        match state
+                            .sessions()
+                            .promote_alias_to_user(alias_user, &channel_kind_str, canonical_user)
+                        {
+                            Ok(Some(session_id)) => session_id,
+                            Ok(None) => match state
+                                .sessions()
+                                .get_or_create(user_id.as_ref(), &channel_kind_str)
+                            {
+                                Ok(session_id) => session_id,
+                                Err(e) => {
+                                    tracing::error!(error = %e, "Failed to create session for inbound message");
+                                    continue;
+                                }
+                            },
+                            Err(e) => {
+                                tracing::warn!(error = %e, alias = %alias_user, canonical = %canonical_user, "Failed to promote alias session; falling back to canonical lookup");
+                                match state
+                                    .sessions()
+                                    .get_or_create(user_id.as_ref(), &channel_kind_str)
+                                {
+                                    Ok(session_id) => session_id,
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "Failed to create session for inbound message");
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        match state.sessions().get_or_create(user_id.as_ref(), &channel_kind_str) {
+                            Ok(session_id) => session_id,
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to create session for inbound message");
+                                continue;
+                            }
+                        }
+                    }
+                } else {
+                    match state.sessions().get_or_create(user_id.as_ref(), &channel_kind_str) {
+                        Ok(session_id) => session_id,
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to create session for inbound message");
+                            continue;
+                        }
+                    }
+                };
+
+                let orch = orchestration::HybridOrchestrator::new(
+                    std::sync::Arc::new(state.config().clone()),
+                );
+                let classification = match orch.classify(&text, Some(state.providers())).await {
+                    Ok(classification) => classification,
                     Err(e) => {
-                        tracing::error!(error = %e, "Failed to create session for inbound message");
+                        tracing::error!(error = %e, "Failed to classify inbound message");
                         continue;
                     }
                 };
@@ -198,7 +279,10 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                 let memory_ctx = if state.config().memory.enabled {
                     if let Some(ref uid) = user_id {
                         let budget = state.config().memory.semantic_token_budget;
-                        state.memory().build_context(uid, &session_id, &text, budget).ok()
+                        state
+                            .memory()
+                            .build_context_for_task(uid, &session_id, &text, &classification, budget)
+                            .ok()
                     } else {
                         None
                     }
@@ -217,29 +301,36 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                     },
                 );
 
-                // Build conversation from working memory.
-                let conversation: Vec<ngenorca_plugin_sdk::ChatMessage> = state
-                    .memory()
-                    .working
-                    .get_session(&session_id)
-                    .into_iter()
-                    .map(|wm| ngenorca_plugin_sdk::ChatMessage {
-                        role: wm.role.clone(),
-                        content: wm.content.clone(),
+                // Build conversation from prior working memory.
+                let conversation: Vec<ngenorca_plugin_sdk::ChatMessage> = memory_ctx
+                    .as_ref()
+                    .map(|ctx| {
+                        ctx.working_messages
+                            .iter()
+                            .map(|wm| ngenorca_plugin_sdk::ChatMessage {
+                                role: wm.role.clone(),
+                                content: wm.content.clone(),
+                            })
+                            .collect()
                     })
-                    .collect();
+                    .unwrap_or_default();
 
                 // Orchestrate.
-                let orch = orchestration::HybridOrchestrator::new(
-                    std::sync::Arc::new(state.config().clone()),
-                );
                 match orch
-                    .process(
+                    .process_with_classification(
                         &text,
+                        &classification,
                         &conversation,
                         state.providers(),
                         Some(state.plugins()),
                         memory_ctx.as_ref(),
+                        orchestration::InvocationContext {
+                            learned_router: Some(state.learned_router()),
+                            session_id: Some(&session_id),
+                            user_id: user_id.as_ref(),
+                            channel: Some(&channel_kind_str),
+                            event_bus: Some(state.event_bus()),
+                        },
                     )
                     .await
                 {
@@ -297,7 +388,7 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                             id: ngenorca_core::types::EventId::new(),
                             timestamp: chrono::Utc::now(),
                             user_id: user_id.clone(),
-                            trust: ngenorca_core::types::TrustLevel::Unknown,
+                            trust: resolved_identity.trust,
                             session_id: session_id.clone(),
                             channel: msg.channel.clone(),
                             channel_kind: msg.channel_kind.clone(),

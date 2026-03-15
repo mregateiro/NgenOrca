@@ -9,6 +9,7 @@ use ngenorca_core::orchestration::{
     ClassificationMethod, TaskClassification, TaskComplexity, TaskIntent,
 };
 use ngenorca_plugin_sdk::{ChatMessage, TaskClassifier};
+use std::collections::BTreeSet;
 use tracing::debug;
 
 /// A zero-cost, regex/keyword-based task classifier.
@@ -278,7 +279,7 @@ impl TaskClassifier for RuleBasedClassifier {
             complexity,
             confidence,
             method: ClassificationMethod::RuleBased,
-            domain_tags: vec![],
+            domain_tags: extract_domain_tags(&lower),
             language: detect_language(&lower),
         })
     }
@@ -316,6 +317,54 @@ fn detect_language(text: &str) -> Option<String> {
     } else {
         Some("en".into())
     }
+}
+
+fn extract_domain_tags(text: &str) -> Vec<String> {
+    let domain_patterns = [
+        ("rust", &["rust", "cargo", "tokio", "serde", "clippy"][..]),
+        (
+            "python",
+            &["python", "pytest", "pandas", "django", "fastapi"][..],
+        ),
+        (
+            "javascript",
+            &["javascript", "node", "npm", "react", "next.js"][..],
+        ),
+        (
+            "typescript",
+            &["typescript", "tsconfig", "tsx", "typecheck"][..],
+        ),
+        ("sql", &["sql", "query", "postgres", "sqlite", "mysql"][..]),
+        (
+            "web",
+            &["html", "css", "frontend", "backend", "http", "api"][..],
+        ),
+        (
+            "infrastructure",
+            &["docker", "kubernetes", "deploy", "nginx", "systemd"][..],
+        ),
+        (
+            "security",
+            &["auth", "token", "jwt", "permission", "security"][..],
+        ),
+        (
+            "orchestration",
+            &["routing", "orchestr", "subagent", "agent", "workflow"][..],
+        ),
+        (
+            "memory",
+            &["memory", "context", "episodic", "semantic", "working memory"][..],
+        ),
+    ];
+
+    let mut tags = BTreeSet::new();
+    for (tag, markers) in domain_patterns {
+        if markers.iter().any(|marker| text.contains(marker)) {
+            tags.insert(tag.to_string());
+        }
+    }
+
+    tags.into_iter().take(4).collect()
 }
 
 #[cfg(test)]
@@ -363,5 +412,17 @@ mod tests {
     async fn test_language_detection_pt() {
         let lang = detect_language("como é que posso fazer isto para funcionar mais rápido");
         assert_eq!(lang, Some("pt".into()));
+    }
+
+    #[tokio::test]
+    async fn test_domain_tags_detected() {
+        let c = RuleBasedClassifier::new();
+        let r = c
+            .classify("fix this rust cargo memory routing bug", None)
+            .await
+            .unwrap();
+        assert!(r.domain_tags.iter().any(|t| t == "rust"));
+        assert!(r.domain_tags.iter().any(|t| t == "memory"));
+        assert!(r.domain_tags.iter().any(|t| t == "orchestration"));
     }
 }

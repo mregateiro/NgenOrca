@@ -67,9 +67,12 @@ pub enum EventPayload {
     ToolExecution {
         tool_name: String,
         session_id: SessionId,
+        channel: Option<String>,
         started_at: DateTime<Utc>,
         duration_ms: Option<u64>,
         success: Option<bool>,
+        failure_class: Option<String>,
+        outcome: Option<String>,
     },
 
     /// System lifecycle event.
@@ -294,8 +297,27 @@ mod tests {
             quality: QualityVerdict::Accept { score: Some(0.85) },
             quality_method: QualityMethod::Heuristic,
             escalated: false,
+            user_id: Some(crate::types::UserId("user-1".into())),
+            channel: Some("web".into()),
             latency_ms: 120,
             total_tokens: 256,
+            correction: CorrectionRecord {
+                tool_rounds: 1,
+                had_failures: false,
+                had_blocked_calls: false,
+                verification_attempted: true,
+                grounded: true,
+                remediation_attempted: false,
+                remediation_succeeded: false,
+                post_synthesis_verification_attempted: false,
+                post_synthesis_drift_corrected: false,
+            },
+            synthesis: SynthesisRecord {
+                attempted: false,
+                succeeded: false,
+                contradiction_score: 0.0,
+                conflicting_branches: 0,
+            },
             timestamp: chrono::Utc::now(),
         };
         let payload = EventPayload::OrchestrationCompleted(record);

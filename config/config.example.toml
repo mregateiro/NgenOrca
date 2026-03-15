@@ -74,6 +74,16 @@ model = "anthropic/claude-sonnet-4-20250514"
 # max_escalations = 2              # Max retries before giving up
 # auto_accept_learned = true       # Skip quality gate for learned routing rules
 
+# Learned routing policy and operator diagnostics defaults:
+# [agent.learned_routing]
+# enabled = true
+# min_effective_confidence = 0.45  # Penalized effective confidence threshold
+# min_samples = 1                  # Require at least N observed cycles before reuse
+# decay_after_days = 14            # Start penalizing stale rules after this many days
+# max_rule_age_days = 90           # Do not reuse rules older than this (0 = unlimited)
+# staleness_penalty_per_day = 0.01 # Confidence penalty applied per stale day
+# diagnostics_include_penalized = false
+
 # ── Sub-Agents ───────────────────────────────────────────────────
 # Define sub-agents the orchestrator can delegate to.
 # Each sub-agent has a name, model, roles, and tuning parameters.
@@ -252,6 +262,18 @@ semantic_token_budget = 4096
 [sandbox]
 # backend = "Auto"                 # Auto | WindowsJob | LinuxSeccomp | MacOsSandbox | Container | None
 enabled = true
+# If false, tools marked as sandbox-required (for example `run_command`) are refused.
+
+# Fine-grained defaults for sandboxed command execution:
+# [sandbox.policy]
+# allow_network = false
+# allow_workspace_write = true
+# allow_child_processes = true
+# additional_read_paths = ["/tmp/ngenorca-read"]
+# additional_write_paths = ["/tmp/ngenorca-write"]
+# memory_limit_mb = 512
+# cpu_limit_seconds = 30
+# wall_time_limit_seconds = 60
 
 # ── Observability ────────────────────────────────────────────────
 [observability]

@@ -58,11 +58,17 @@ NgenOrca now includes first-party tools for common agent actions:
 | `read_file` | Read workspace files, including line ranges |
 | `write_file` | Create, overwrite, or append workspace files |
 | `grep_workspace` | Search text recursively in the workspace |
+| `list_skills` | List reusable skill and automation artifacts, including lifecycle and review state |
+| `read_skill` | Read a stored skill artifact with steps, verification notes, and usage metadata |
+| `validate_skill` | Validate a skill artifact for executable automation review boundaries, staged approval readiness, and generated script previews |
+| `synthesize_skill_script` | Generate a bash script preview plus an approval checklist for an executable skill recipe |
+| `save_skill` | Persist a structured reusable skill or automation artifact with lifecycle metadata and validation feedback |
+| `execute_skill_stages` | Execute supported staged skill steps with persisted journals, checkpoints, and rollback application for guarded write flows |
 | `fetch_url` | Fetch a web page or API URL |
 | `web_search` | Search the public web |
 | `run_command` | Run OS commands from the workspace |
 
-Command execution is workspace-scoped and marked as sandbox-requiring in the tool system.
+Command execution is workspace-scoped and marked as sandbox-requiring in the tool system. Skill artifacts are stored as typed reusable automation recipes under the runtime data directory, with versioning, operator-review state, retrieval usage tracking, explicit validation for executable automation review boundaries, generated script previews for executable recipes, persisted staged-execution journals, guarded checkpoints, rollback planning, and staged approval feedback.
 
 ## Quick Start
 
@@ -239,6 +245,9 @@ Full reference: [`config/config.example.toml`](config/config.example.toml)
 Guides:
 - [Configuration Guide](docs/CONFIGURATION_GUIDE.md) — all providers, channels, and settings
 - [NAS Deployment](docs/NAS_DEPLOYMENT.md) — WireGuard + nginx + Authelia setup
+- [OpenClaw Gap Analysis](docs/OPENCLAW_GAP_ANALYSIS.md) — current capability comparison and missing operational behavior
+- [Execution Roadmap](docs/EXECUTION_ROADMAP.md) — epic-by-epic plan, acceptance criteria, and parallel workstreams
+- [OpenClaw Parity Status](docs/OPENCLAW_PARITY_STATUS.md) — completed local parity work, validations, and outstanding risks
 - [Enterprise Readiness Checklist](docs/ENTERPRISE_READINESS_CHECKLIST.md) — security, compliance, and operations hardening tracker
 - [Enterprise Architecture Diagrams](docs/ENTERPRISE_ARCHITECTURE_DIAGRAMS.md) — TOGAF functional/technical views + C4/ArchiMate alternatives
 
@@ -250,14 +259,20 @@ Guides:
 | `GET /config` | Built-in browser editor for the persisted config file |
 | `GET /metrics` | Prometheus-compatible metrics |
 | `GET /api/v1/status` | System status + caller identity |
-| `GET /api/v1/whoami` | Show authenticated user (verify Authelia flow) |
+| `GET /api/v1/whoami` | Show authenticated user plus runtime identity resolution and pairing guidance |
 | `GET /api/v1/providers` | Configured LLM providers |
 | `GET /api/v1/channels` | Configured channel adapters |
+| `GET /api/v1/orchestration` | Orchestration configuration, learned-route diagnostics, and recent operator history summaries |
+| `GET /api/v1/orchestration/learned` | Learned-route diagnostics and aggregated routing history |
 | `GET /api/v1/identity/users` | Registered users |
+| `POST /api/v1/identity/pairing/start` | Create a runtime identity pairing request from the current web handle or a supplied device/handle |
+| `POST /api/v1/identity/pairing/complete` | Complete a pairing request, create or attach the canonical user, and optionally rebind an existing session |
+| `POST /api/v1/identity/challenge/start` | Create a signed nonce challenge for a known paired device |
+| `POST /api/v1/identity/challenge/verify` | Verify the signed nonce response from a challenged device and optionally rebind an existing session |
 | `GET /api/v1/memory/stats` | Memory system statistics |
 | `GET /api/v1/events/count` | Event log count |
-| `POST /api/v1/chat` | Send a chat message |
-| `WS /ws` | WebSocket (chat + real‑time event push) |
+| `POST /api/v1/chat` | Send a chat message with runtime identity diagnostics for pairing/challenge cases |
+| `WS /ws` | WebSocket (chat + real‑time event push, including identity guidance on connect and message errors) |
 
 ## CLI Commands
 

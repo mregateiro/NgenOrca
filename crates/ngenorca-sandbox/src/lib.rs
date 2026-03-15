@@ -123,6 +123,16 @@ pub async fn sandboxed_exec(
     args: &[&str],
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
+    sandboxed_exec_with_cwd(command, args, None, policy).await
+}
+
+/// Execute a command within the sandbox, optionally setting the working directory.
+pub async fn sandboxed_exec_with_cwd(
+    command: &str,
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+    policy: &SandboxPolicy,
+) -> Result<SandboxedOutput> {
     let env = detect_environment();
 
     info!(?env, command, "Executing in sandbox");
@@ -131,45 +141,115 @@ pub async fn sandboxed_exec(
         SandboxEnvironment::Container => {
             // Inside a container, the container IS the sandbox.
             // Just run the command directly.
-            exec_direct(command, args, policy).await
+            exec_direct(
+                command,
+                args,
+                cwd,
+                policy,
+                build_sandbox_audit(
+                    env,
+                    "container",
+                    policy,
+                    true,
+                    &["container_boundary", "wall_timeout"],
+                    Some("ambient container isolation detected; command-specific restrictions depend on the outer container profile".into()),
+                ),
+            )
+            .await
         }
         SandboxEnvironment::Windows => {
             // Use Windows Job Objects.
             #[cfg(windows)]
             {
-                exec_windows_job(command, args, policy).await
+                exec_windows_job(command, args, cwd, policy).await
             }
             #[cfg(not(windows))]
             {
                 warn!("Windows sandbox not available on this platform");
-                exec_direct(command, args, policy).await
+                exec_direct(
+                    command,
+                    args,
+                    cwd,
+                    policy,
+                    build_sandbox_audit(
+                        env,
+                        "direct",
+                        policy,
+                        false,
+                        &["wall_timeout"],
+                        Some("Windows backend unavailable on this platform".into()),
+                    ),
+                )
+                .await
             }
         }
         SandboxEnvironment::Linux => {
             #[cfg(target_os = "linux")]
             {
-                exec_linux_sandboxed(command, args, policy).await
+                exec_linux_sandboxed(command, args, cwd, policy).await
             }
             #[cfg(not(target_os = "linux"))]
             {
                 warn!("Linux sandbox not available on this platform");
-                exec_direct(command, args, policy).await
+                exec_direct(
+                    command,
+                    args,
+                    cwd,
+                    policy,
+                    build_sandbox_audit(
+                        env,
+                        "direct",
+                        policy,
+                        false,
+                        &["wall_timeout"],
+                        Some("Linux backend unavailable on this platform".into()),
+                    ),
+                )
+                .await
             }
         }
         SandboxEnvironment::MacOs => {
             #[cfg(target_os = "macos")]
             {
-                exec_macos_sandboxed(command, args, policy).await
+                exec_macos_sandboxed(command, args, cwd, policy).await
             }
             #[cfg(not(target_os = "macos"))]
             {
                 warn!("macOS sandbox not available on this platform");
-                exec_direct(command, args, policy).await
+                exec_direct(
+                    command,
+                    args,
+                    cwd,
+                    policy,
+                    build_sandbox_audit(
+                        env,
+                        "direct",
+                        policy,
+                        false,
+                        &["wall_timeout"],
+                        Some("macOS backend unavailable on this platform".into()),
+                    ),
+                )
+                .await
             }
         }
         SandboxEnvironment::Unknown => {
             warn!("Unknown platform, running without sandbox");
-            exec_direct(command, args, policy).await
+            exec_direct(
+                command,
+                args,
+                cwd,
+                policy,
+                build_sandbox_audit(
+                    env,
+                    "direct",
+                    policy,
+                    false,
+                    &["wall_timeout"],
+                    Some("unknown platform; falling back to direct execution".into()),
+                ),
+            )
+            .await
         }
     }
 }
@@ -181,13 +261,173 @@ pub struct SandboxedOutput {
     pub stderr: String,
     pub exit_code: i32,
     pub timed_out: bool,
+    pub audit: SandboxAudit,
+}
+
+/// Operator-facing audit details for a single sandboxed execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SandboxAudit {
+    pub requested_environment: SandboxEnvironment,
+    pub backend: String,
+    pub isolation_active: bool,
+    pub enforced_controls: Vec<String>,
+    pub policy_gaps: Vec<String>,
+    pub fallback_reason: Option<String>,
+}
+
+/// Return the expected policy-enforcement audit for the current environment.
+pub fn audit_policy(policy: &SandboxPolicy, enabled: bool) -> SandboxAudit {
+    let env = detect_environment();
+
+    if !enabled {
+        return build_sandbox_audit(
+            env,
+            "direct",
+            policy,
+            false,
+            &["wall_timeout"],
+            Some("sandbox disabled in configuration".into()),
+        );
+    }
+
+    match env {
+        SandboxEnvironment::Container => build_sandbox_audit(
+            env,
+            "container",
+            policy,
+            true,
+            &["container_boundary", "wall_timeout"],
+            Some("ambient container isolation detected; command-specific restrictions depend on the outer container profile".into()),
+        ),
+        SandboxEnvironment::Windows => build_sandbox_audit(
+            env,
+            "windows_job",
+            policy,
+            true,
+            &["job_object", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+            None,
+        ),
+        SandboxEnvironment::Linux => build_sandbox_audit(
+            env,
+            "linux_unshare",
+            policy,
+            true,
+            &[
+                "namespace_isolation",
+                "wall_timeout",
+                "process_limit",
+                "memory_limit",
+                "cpu_limit",
+                "network_policy",
+            ],
+            None,
+        ),
+        SandboxEnvironment::MacOs => build_sandbox_audit(
+            env,
+            "macos_sandbox_exec",
+            policy,
+            true,
+            &["seatbelt_profile", "wall_timeout", "filesystem_policy", "network_policy"],
+            None,
+        ),
+        SandboxEnvironment::Unknown => build_sandbox_audit(
+            env,
+            "direct",
+            policy,
+            false,
+            &["wall_timeout"],
+            Some("unknown platform; falling back to direct execution".into()),
+        ),
+    }
+}
+
+/// Execute a command without backend sandboxing while preserving timeout behavior.
+pub async fn unsandboxed_exec_with_cwd(
+    command: &str,
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+    policy: &SandboxPolicy,
+) -> Result<SandboxedOutput> {
+    exec_direct(
+        command,
+        args,
+        cwd,
+        policy,
+        build_sandbox_audit(
+            detect_environment(),
+            "direct",
+            policy,
+            false,
+            &["wall_timeout"],
+            Some("sandbox disabled in configuration".into()),
+        ),
+    )
+    .await
+}
+
+fn build_sandbox_audit(
+    requested_environment: SandboxEnvironment,
+    backend: &str,
+    policy: &SandboxPolicy,
+    isolation_active: bool,
+    enforced_controls: &[&str],
+    fallback_reason: Option<String>,
+) -> SandboxAudit {
+    let enforced = enforced_controls
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    let mut policy_gaps = Vec::new();
+
+    let filesystem_requested = !policy.allow_read_paths.is_empty() || !policy.allow_write_paths.is_empty();
+    if filesystem_requested && !enforced_controls.contains(&"filesystem_policy") {
+        policy_gaps.push("filesystem scope is not fully enforced by the active backend".into());
+    }
+    if !policy.allow_network && !enforced_controls.contains(&"network_policy") {
+        policy_gaps.push("network restriction is not enforced by the active backend".into());
+    }
+    if !policy.allow_spawn && !enforced_controls.contains(&"process_limit") {
+        policy_gaps.push("child-process restriction is not enforced by the active backend".into());
+    }
+    if (policy.memory_limit_bytes > 0 || policy.cpu_time_limit_secs > 0)
+        && !(enforced_controls.contains(&"memory_limit") && enforced_controls.contains(&"cpu_limit"))
+    {
+        policy_gaps.push("CPU and/or memory limits are not fully enforced by the active backend".into());
+    }
+
+    SandboxAudit {
+        requested_environment,
+        backend: backend.into(),
+        isolation_active,
+        enforced_controls: enforced,
+        policy_gaps,
+        fallback_reason,
+    }
+}
+
+fn sandboxed_output(
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    timed_out: bool,
+    audit: SandboxAudit,
+) -> SandboxedOutput {
+    SandboxedOutput {
+        stdout,
+        stderr,
+        exit_code,
+        timed_out,
+        audit,
+    }
 }
 
 /// Direct execution (used inside containers or as fallback).
 async fn exec_direct(
     command: &str,
     args: &[&str],
+    cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
+    audit: SandboxAudit,
 ) -> Result<SandboxedOutput> {
     use tokio::process::Command;
 
@@ -197,22 +437,30 @@ async fn exec_direct(
         std::time::Duration::from_secs(300) // 5 min default cap
     };
 
-    let result = tokio::time::timeout(timeout, Command::new(command).args(args).output()).await;
+    let mut cmd = Command::new(command);
+    cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+
+    let result = tokio::time::timeout(timeout, cmd.output()).await;
 
     match result {
-        Ok(Ok(output)) => Ok(SandboxedOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            timed_out: false,
-        }),
+        Ok(Ok(output)) => Ok(sandboxed_output(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status.code().unwrap_or(-1),
+            false,
+            audit,
+        )),
         Ok(Err(e)) => Err(Error::Sandbox(format!("Exec failed: {e}"))),
-        Err(_) => Ok(SandboxedOutput {
-            stdout: String::new(),
-            stderr: format!("Process timed out after {}s", policy.wall_timeout_secs),
-            exit_code: -1,
-            timed_out: true,
-        }),
+        Err(_) => Ok(sandboxed_output(
+            String::new(),
+            format!("Process timed out after {}s", policy.wall_timeout_secs),
+            -1,
+            true,
+            audit,
+        )),
     }
 }
 
@@ -228,6 +476,7 @@ async fn exec_direct(
 async fn exec_windows_job(
     command: &str,
     args: &[&str],
+    cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
     use std::mem::{size_of, zeroed};
@@ -246,7 +495,21 @@ async fn exec_windows_job(
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() || job == INVALID_HANDLE_VALUE {
         warn!("Failed to create Job Object, falling back to basic exec");
-        return exec_direct(command, args, policy).await;
+        return exec_direct(
+            command,
+            args,
+            cwd,
+            policy,
+            build_sandbox_audit(
+                SandboxEnvironment::Windows,
+                "direct",
+                policy,
+                false,
+                &["wall_timeout"],
+                Some("failed to create Windows Job Object".into()),
+            ),
+        )
+        .await;
     }
 
     // ── Configure limits ──
@@ -282,7 +545,21 @@ async fn exec_windows_job(
     if set_ok == 0 {
         warn!("Failed to set Job Object limits, falling back to basic exec");
         unsafe { CloseHandle(job) };
-        return exec_direct(command, args, policy).await;
+        return exec_direct(
+            command,
+            args,
+            cwd,
+            policy,
+            build_sandbox_audit(
+                SandboxEnvironment::Windows,
+                "direct",
+                policy,
+                false,
+                &["wall_timeout"],
+                Some("failed to configure Windows Job Object limits".into()),
+            ),
+        )
+        .await;
     }
 
     // ── Spawn child process and assign to Job Object ──
@@ -294,6 +571,9 @@ async fn exec_windows_job(
 
     let mut std_cmd = std::process::Command::new(command);
     std_cmd.args(args);
+    if let Some(cwd) = cwd {
+        std_cmd.current_dir(cwd);
+    }
     std_cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -328,26 +608,42 @@ async fn exec_windows_job(
     unsafe { CloseHandle(job_raw as _) };
 
     match result {
-        Ok(Ok(Ok(output))) => Ok(SandboxedOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            timed_out: false,
-        }),
+        Ok(Ok(Ok(output))) => Ok(sandboxed_output(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status.code().unwrap_or(-1),
+            false,
+            build_sandbox_audit(
+                SandboxEnvironment::Windows,
+                "windows_job",
+                policy,
+                true,
+                &["job_object", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                None,
+            ),
+        )),
         Ok(Ok(Err(e))) => Err(Error::Sandbox(format!("Exec in job failed: {e}"))),
         Ok(Err(e)) => Err(Error::Sandbox(format!("Blocking task panicked: {e}"))),
         Err(_) => {
             // Timeout — the Job Object's KILL_ON_JOB_CLOSE will terminate
             // the child when we dropped/closed the job handle above.
-            Ok(SandboxedOutput {
-                stdout: String::new(),
-                stderr: format!(
+            Ok(sandboxed_output(
+                String::new(),
+                format!(
                     "Process timed out after {}s (Job Object killed)",
                     policy.wall_timeout_secs
                 ),
-                exit_code: -1,
-                timed_out: true,
-            })
+                -1,
+                true,
+                build_sandbox_audit(
+                    SandboxEnvironment::Windows,
+                    "windows_job",
+                    policy,
+                    true,
+                    &["job_object", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                    None,
+                ),
+            ))
         }
     }
 }
@@ -368,6 +664,7 @@ async fn exec_windows_job(
 async fn exec_linux_sandboxed(
     command: &str,
     args: &[&str],
+    cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
     use tokio::process::Command;
@@ -384,7 +681,7 @@ async fn exec_linux_sandboxed(
 
     if !have_unshare {
         warn!("'unshare' not found, falling back to basic limits");
-        return exec_linux_prlimit(command, args, policy).await;
+        return exec_linux_prlimit(command, args, cwd, policy).await;
     }
 
     let mut cmd_args: Vec<String> = Vec::new();
@@ -443,30 +740,65 @@ async fn exec_linux_sandboxed(
 
     let str_args: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
 
-    let result =
-        tokio::time::timeout(timeout, Command::new("unshare").args(&str_args).output()).await;
+    let mut cmd = Command::new("unshare");
+    cmd.args(&str_args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+
+    let result = tokio::time::timeout(timeout, cmd.output()).await;
 
     match result {
-        Ok(Ok(output)) => Ok(SandboxedOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            timed_out: false,
-        }),
+        Ok(Ok(output)) => Ok(sandboxed_output(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status.code().unwrap_or(-1),
+            false,
+            build_sandbox_audit(
+                SandboxEnvironment::Linux,
+                "linux_unshare",
+                policy,
+                true,
+                &[
+                    "namespace_isolation",
+                    "wall_timeout",
+                    "process_limit",
+                    "memory_limit",
+                    "cpu_limit",
+                    "network_policy",
+                ],
+                None,
+            ),
+        )),
         Ok(Err(e)) => {
             // If unshare fails (e.g., insufficient privileges), fall back to prlimit only
             warn!(error = %e, "unshare failed, falling back to prlimit");
-            exec_linux_prlimit(command, args, policy).await
+            exec_linux_prlimit(command, args, cwd, policy).await
         }
-        Err(_) => Ok(SandboxedOutput {
-            stdout: String::new(),
-            stderr: format!(
+        Err(_) => Ok(sandboxed_output(
+            String::new(),
+            format!(
                 "Process timed out after {}s (killed)",
                 policy.wall_timeout_secs
             ),
-            exit_code: -1,
-            timed_out: true,
-        }),
+            -1,
+            true,
+            build_sandbox_audit(
+                SandboxEnvironment::Linux,
+                "linux_unshare",
+                policy,
+                true,
+                &[
+                    "namespace_isolation",
+                    "wall_timeout",
+                    "process_limit",
+                    "memory_limit",
+                    "cpu_limit",
+                    "network_policy",
+                ],
+                None,
+            ),
+        )),
     }
 }
 
@@ -475,6 +807,7 @@ async fn exec_linux_sandboxed(
 async fn exec_linux_prlimit(
     command: &str,
     args: &[&str],
+    cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
     use tokio::process::Command;
@@ -506,23 +839,44 @@ async fn exec_linux_prlimit(
 
     let str_args: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
 
-    let result =
-        tokio::time::timeout(timeout, Command::new("prlimit").args(&str_args).output()).await;
+    let mut cmd = Command::new("prlimit");
+    cmd.args(&str_args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+
+    let result = tokio::time::timeout(timeout, cmd.output()).await;
 
     match result {
-        Ok(Ok(output)) => Ok(SandboxedOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            timed_out: false,
-        }),
+        Ok(Ok(output)) => Ok(sandboxed_output(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status.code().unwrap_or(-1),
+            false,
+            build_sandbox_audit(
+                SandboxEnvironment::Linux,
+                "linux_prlimit",
+                policy,
+                false,
+                &["prlimit", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                Some("namespace isolation unavailable; using prlimit-only enforcement".into()),
+            ),
+        )),
         Ok(Err(e)) => Err(Error::Sandbox(format!("prlimit exec failed: {e}"))),
-        Err(_) => Ok(SandboxedOutput {
-            stdout: String::new(),
-            stderr: format!("Process timed out after {}s", policy.wall_timeout_secs),
-            exit_code: -1,
-            timed_out: true,
-        }),
+        Err(_) => Ok(sandboxed_output(
+            String::new(),
+            format!("Process timed out after {}s", policy.wall_timeout_secs),
+            -1,
+            true,
+            build_sandbox_audit(
+                SandboxEnvironment::Linux,
+                "linux_prlimit",
+                policy,
+                false,
+                &["prlimit", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                Some("namespace isolation unavailable; using prlimit-only enforcement".into()),
+            ),
+        )),
     }
 }
 
@@ -540,6 +894,7 @@ async fn exec_linux_prlimit(
 async fn exec_macos_sandboxed(
     command: &str,
     args: &[&str],
+    cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
     use tokio::process::Command;
@@ -600,7 +955,21 @@ async fn exec_macos_sandboxed(
         std::env::temp_dir().join(format!("ngenorca_sandbox_{}.sb", std::process::id()));
     if let Err(e) = std::fs::write(&profile_path, &profile) {
         warn!(error = %e, "Failed to write sandbox profile, falling back to basic exec");
-        return exec_direct(command, args, policy).await;
+        return exec_direct(
+            command,
+            args,
+            cwd,
+            policy,
+            build_sandbox_audit(
+                SandboxEnvironment::MacOs,
+                "direct",
+                policy,
+                false,
+                &["wall_timeout"],
+                Some("failed to materialize macOS sandbox profile".into()),
+            ),
+        )
+        .await;
     }
 
     let timeout = if policy.wall_timeout_secs > 0 {
@@ -614,6 +983,9 @@ async fn exec_macos_sandboxed(
     cmd.arg("-f").arg(&profile_path);
     cmd.arg(command);
     cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
 
     let result = tokio::time::timeout(timeout, cmd.output()).await;
 
@@ -621,25 +993,55 @@ async fn exec_macos_sandboxed(
     let _ = std::fs::remove_file(&profile_path);
 
     match result {
-        Ok(Ok(output)) => Ok(SandboxedOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            timed_out: false,
-        }),
+        Ok(Ok(output)) => Ok(sandboxed_output(
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status.code().unwrap_or(-1),
+            false,
+            build_sandbox_audit(
+                SandboxEnvironment::MacOs,
+                "macos_sandbox_exec",
+                policy,
+                true,
+                &["seatbelt_profile", "wall_timeout", "filesystem_policy", "network_policy"],
+                None,
+            ),
+        )),
         Ok(Err(e)) => {
             warn!(error = %e, "sandbox-exec failed, falling back to basic exec");
-            exec_direct(command, args, policy).await
+            exec_direct(
+                command,
+                args,
+                cwd,
+                policy,
+                build_sandbox_audit(
+                    SandboxEnvironment::MacOs,
+                    "direct",
+                    policy,
+                    false,
+                    &["wall_timeout"],
+                    Some("sandbox-exec failed; falling back to direct execution".into()),
+                ),
+            )
+            .await
         }
-        Err(_) => Ok(SandboxedOutput {
-            stdout: String::new(),
-            stderr: format!(
+        Err(_) => Ok(sandboxed_output(
+            String::new(),
+            format!(
                 "Process timed out after {}s (killed)",
                 policy.wall_timeout_secs
             ),
-            exit_code: -1,
-            timed_out: true,
-        }),
+            -1,
+            true,
+            build_sandbox_audit(
+                SandboxEnvironment::MacOs,
+                "macos_sandbox_exec",
+                policy,
+                true,
+                &["seatbelt_profile", "wall_timeout", "filesystem_policy", "network_policy"],
+                None,
+            ),
+        )),
     }
 }
 
@@ -731,6 +1133,7 @@ mod tests {
             stderr: String::new(),
             exit_code: 0,
             timed_out: false,
+            audit: audit_policy(&SandboxPolicy::default(), true),
         };
         assert_eq!(out.exit_code, 0);
         assert!(!out.timed_out);
@@ -744,9 +1147,24 @@ mod tests {
             stderr: "timed out".into(),
             exit_code: -1,
             timed_out: true,
+            audit: audit_policy(&SandboxPolicy::default(), true),
         };
         assert!(out.timed_out);
         assert_eq!(out.exit_code, -1);
+    }
+
+    #[test]
+    fn audit_policy_reports_backend_gaps() {
+        let audit = audit_policy(&SandboxPolicy::default(), true);
+        assert!(!audit.backend.is_empty());
+        assert!(audit.enforced_controls.iter().any(|value| value == "wall_timeout"));
+    }
+
+    #[test]
+    fn audit_policy_reports_disabled_sandbox() {
+        let audit = audit_policy(&SandboxPolicy::default(), false);
+        assert_eq!(audit.backend, "direct");
+        assert!(audit.fallback_reason.is_some());
     }
 
     // ─── sandboxed_exec integration tests ───
@@ -761,6 +1179,7 @@ mod tests {
         assert_eq!(output.exit_code, 0);
         assert!(output.stdout.contains("hello"));
         assert!(!output.timed_out);
+        assert!(!output.audit.backend.is_empty());
     }
 
     #[tokio::test]
@@ -782,5 +1201,42 @@ mod tests {
         let output = result.unwrap();
         assert!(output.timed_out);
         assert_eq!(output.exit_code, -1);
+    }
+
+    #[tokio::test]
+    async fn exec_with_cwd_preserves_working_directory() {
+        let policy = SandboxPolicy::default();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let cwd = std::env::temp_dir().join(format!(
+            "ngenorca_sandbox_cwd_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("marker.txt"), "ok").unwrap();
+
+        #[cfg(windows)]
+        let result = sandboxed_exec_with_cwd(
+            "cmd",
+            &["/C", "if", "exist", "marker.txt", "(echo", "marker-found)", "else", "(echo", "missing)"] ,
+            Some(&cwd),
+            &policy,
+        )
+        .await;
+        #[cfg(not(windows))]
+        let result = sandboxed_exec_with_cwd(
+            "sh",
+            &["-c", "test -f marker.txt && echo marker-found || echo missing"],
+            Some(&cwd),
+            &policy,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.stdout.contains("marker-found"));
     }
 }

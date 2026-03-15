@@ -50,9 +50,35 @@ impl IdentityStore {
                 UNIQUE(channel_kind, handle)
             );
 
+            CREATE TABLE IF NOT EXISTS pairing_requests (
+                request_id              TEXT PRIMARY KEY,
+                channel_kind            TEXT,
+                handle                  TEXT,
+                device_id               TEXT,
+                device_name             TEXT,
+                requested_user_id       TEXT,
+                requested_display_name  TEXT,
+                created_at              TEXT NOT NULL,
+                expires_at              TEXT NOT NULL,
+                completed_at            TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS challenge_requests (
+                request_id   TEXT PRIMARY KEY,
+                user_id      TEXT,
+                device_id    TEXT NOT NULL,
+                nonce_b64    TEXT NOT NULL,
+                reason       TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                expires_at   TEXT NOT NULL,
+                verified_at  TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_device_user ON device_bindings(user_id);
             CREATE INDEX IF NOT EXISTS idx_channel_user ON channel_bindings(user_id);
-            CREATE INDEX IF NOT EXISTS idx_channel_lookup ON channel_bindings(channel_kind, handle);",
+            CREATE INDEX IF NOT EXISTS idx_channel_lookup ON channel_bindings(channel_kind, handle);
+            CREATE INDEX IF NOT EXISTS idx_pairing_request_expires ON pairing_requests(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_challenge_request_expires ON challenge_requests(expires_at);",
         )
         .map_err(|e| Error::Database(e.to_string()))?;
 
@@ -261,6 +287,210 @@ impl IdentityStore {
         conn.execute(
             "DELETE FROM device_bindings WHERE user_id = ?1 AND device_id = ?2",
             params![user_id.0, device_id.0],
+        )
+        .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn save_pairing_request(&self, request: &crate::PairingRequest) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO pairing_requests
+             (request_id, channel_kind, handle, device_id, device_name, requested_user_id, requested_display_name, created_at, expires_at, completed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                &request.request_id,
+                request
+                    .channel_kind
+                    .as_ref()
+                    .map(|value| serde_json::to_string(value).unwrap()),
+                request.handle.clone(),
+                request.device_id.as_ref().map(|value| value.0.clone()),
+                request.device_name.clone(),
+                request.requested_user_id.as_ref().map(|value| value.0.clone()),
+                request
+                    .requested_display_name
+                    .clone(),
+                request.created_at.to_rfc3339(),
+                request.expires_at.to_rfc3339(),
+                request.completed_at.map(|value| value.to_rfc3339()),
+            ],
+        )
+        .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_pairing_request(&self, request_id: &str) -> Result<Option<crate::PairingRequest>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let row = conn
+            .query_row(
+                "SELECT channel_kind, handle, device_id, device_name, requested_user_id, requested_display_name, created_at, expires_at, completed_at
+                 FROM pairing_requests WHERE request_id = ?1",
+                params![request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        row.map(
+            |(
+                channel_kind,
+                handle,
+                device_id,
+                device_name,
+                requested_user_id,
+                requested_display_name,
+                created_at,
+                expires_at,
+                completed_at,
+            )| {
+                Ok(crate::PairingRequest {
+                    request_id: request_id.to_string(),
+                    channel_kind: channel_kind
+                        .as_deref()
+                        .map(serde_json::from_str)
+                        .transpose()
+                        .map_err(|e| Error::Serialization(e.to_string()))?,
+                    handle,
+                    device_id: device_id.map(DeviceId),
+                    device_name,
+                    requested_user_id: requested_user_id.map(UserId),
+                    requested_display_name,
+                    created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                        .map_err(|e| Error::Serialization(e.to_string()))?
+                        .with_timezone(&chrono::Utc),
+                    expires_at: chrono::DateTime::parse_from_rfc3339(&expires_at)
+                        .map_err(|e| Error::Serialization(e.to_string()))?
+                        .with_timezone(&chrono::Utc),
+                    completed_at: completed_at
+                        .as_deref()
+                        .map(chrono::DateTime::parse_from_rfc3339)
+                        .transpose()
+                        .map_err(|e| Error::Serialization(e.to_string()))?
+                        .map(|value| value.with_timezone(&chrono::Utc)),
+                })
+            },
+        )
+        .transpose()
+    }
+
+    pub fn mark_pairing_request_completed(&self, request_id: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE pairing_requests SET completed_at = ?2 WHERE request_id = ?1",
+            params![request_id, chrono::Utc::now().to_rfc3339()],
+        )
+        .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn save_challenge_request(&self, request: &crate::ChallengeRequest) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO challenge_requests
+             (request_id, user_id, device_id, nonce_b64, reason, created_at, expires_at, verified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                &request.request_id,
+                request.user_id.as_ref().map(|value| value.0.clone()),
+                request.device_id.0.clone(),
+                request.nonce_b64.clone(),
+                request.reason.clone(),
+                request.created_at.to_rfc3339(),
+                request.expires_at.to_rfc3339(),
+                request.verified_at.map(|value| value.to_rfc3339()),
+            ],
+        )
+        .map_err(|e| Error::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_challenge_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<crate::ChallengeRequest>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let row = conn
+            .query_row(
+                "SELECT user_id, device_id, nonce_b64, reason, created_at, expires_at, verified_at
+                 FROM challenge_requests WHERE request_id = ?1",
+                params![request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        row.map(
+            |(user_id, device_id, nonce_b64, reason, created_at, expires_at, verified_at)| {
+                Ok(crate::ChallengeRequest {
+                    request_id: request_id.to_string(),
+                    user_id: user_id.map(UserId),
+                    device_id: DeviceId(device_id),
+                    nonce_b64,
+                    reason,
+                    created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                        .map_err(|e| Error::Serialization(e.to_string()))?
+                        .with_timezone(&chrono::Utc),
+                    expires_at: chrono::DateTime::parse_from_rfc3339(&expires_at)
+                        .map_err(|e| Error::Serialization(e.to_string()))?
+                        .with_timezone(&chrono::Utc),
+                    verified_at: verified_at
+                        .as_deref()
+                        .map(chrono::DateTime::parse_from_rfc3339)
+                        .transpose()
+                        .map_err(|e| Error::Serialization(e.to_string()))?
+                        .map(|value| value.with_timezone(&chrono::Utc)),
+                })
+            },
+        )
+        .transpose()
+    }
+
+    pub fn mark_challenge_request_verified(&self, request_id: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE challenge_requests SET verified_at = ?2 WHERE request_id = ?1",
+            params![request_id, chrono::Utc::now().to_rfc3339()],
         )
         .map_err(|e| Error::Database(e.to_string()))?;
         Ok(())

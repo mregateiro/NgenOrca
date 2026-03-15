@@ -122,6 +122,34 @@ Available OpenAI models:
 
 > **Where to get your key:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 
+### Learned routing controls
+
+NgenOrca can reuse successful past routing decisions. The learned-routing policy lets operators decide when those cached routes are eligible and how much diagnostic detail the HTTP API exposes by default.
+
+```toml
+[agent.learned_routing]
+enabled = true
+min_effective_confidence = 0.45
+min_samples = 1
+decay_after_days = 14
+max_rule_age_days = 90
+staleness_penalty_per_day = 0.01
+diagnostics_include_penalized = false
+```
+
+- `enabled`: turn learned-route reuse on or off without deleting stored rules.
+- `min_effective_confidence`: minimum penalized confidence after escalation and failure penalties are applied.
+- `min_samples`: minimum observed cycles required before a rule is reused.
+- `decay_after_days`: start subtracting a freshness penalty after this many days without an update.
+- `max_rule_age_days`: mark rules as stale for runtime reuse once they exceed this age. Set to `0` to disable age-based exclusion.
+- `staleness_penalty_per_day`: penalty applied for each day beyond `decay_after_days`.
+- `diagnostics_include_penalized`: when `true`, diagnostics endpoints include rules that are below the active reuse threshold.
+
+Operator endpoints:
+- `GET /api/v1/orchestration` returns the active learned-routing policy plus visible rules and a summary of eligible vs stale routes.
+- `GET /api/v1/orchestration/learned` lists learned rules and accepts `intent`, `target_agent`, `stale_only`, and `include_penalized` query parameters.
+- `DELETE /api/v1/orchestration/learned` clears learned rules globally or by `intent` / `target_agent` filter.
+
 ---
 
 ### Ollama (Local Models)
@@ -589,6 +617,16 @@ Controls how NgenOrca isolates tool execution (commands, code, file access).
 [sandbox]
 enabled = true                # Master switch — disable to run tools unsandboxed
 backend = "Auto"              # How to sandbox tool execution
+
+[sandbox.policy]
+allow_network = false
+allow_workspace_write = true
+allow_child_processes = true
+# additional_read_paths = ["/tmp/ngenorca-read"]
+# additional_write_paths = ["/tmp/ngenorca-write"]
+memory_limit_mb = 512
+cpu_limit_seconds = 30
+wall_time_limit_seconds = 60
 ```
 
 Backend options:
@@ -608,15 +646,29 @@ Backend options:
 
 ```toml
 [sandbox.policy]
-# allow_network = false                # Whether tools can make network calls
-# allowed_paths = [                    # Directories tools can read/write
-#     "~/.ngenorca/workspace",
-#     "/tmp/ngenorca-scratch",
+# allow_network = false                # Whether commands can make network calls
+# allow_workspace_write = true         # Allow writes anywhere under [agent].workspace
+# allow_child_processes = true         # Allow spawned child processes
+# additional_read_paths = [            # Extra readable paths outside the workspace
+#     "/tmp/ngenorca-read",
 # ]
-# memory_limit_mb = 512                # Max memory per tool invocation
-# cpu_limit_seconds = 30               # Max CPU time per tool invocation
-# wall_time_limit_seconds = 60         # Max wall clock time
+# additional_write_paths = [           # Extra writable paths outside the workspace
+#     "/tmp/ngenorca-write",
+# ]
+# memory_limit_mb = 512                # Max memory per command invocation
+# cpu_limit_seconds = 30               # Max CPU time per command invocation
+# wall_time_limit_seconds = 60         # Max wall clock time per command invocation
 ```
+
+- `allow_network`: controls outbound network access for `run_command`.
+- `allow_workspace_write`: when `false`, commands can still read the workspace but cannot write under it unless an explicit `additional_write_paths` entry is provided.
+- `allow_child_processes`: controls whether the invoked command may spawn child processes.
+- `additional_read_paths` / `additional_write_paths`: grant extra filesystem access outside the workspace root.
+- `memory_limit_mb`, `cpu_limit_seconds`, and `wall_time_limit_seconds`: define operator-controlled caps that clamp per-call requested timeouts.
+
+Operator diagnostics:
+- `GET /health` now includes the configured sandbox backend and active policy summary.
+- `GET /api/v1/status` exposes the same sandbox policy details alongside the detected runtime environment.
 
 ---
 
@@ -713,6 +765,11 @@ auth_mode = "Token"
 model = "anthropic/claude-sonnet-4-20250514"
 thinking_level = "Medium"
 workspace = "~/.ngenorca/workspace"
+
+[agent.learned_routing]
+enabled = true
+min_effective_confidence = 0.5
+min_samples = 2
 
 [agent.providers.anthropic]
 # Set via env: NGENORCA_AGENT__PROVIDERS__ANTHROPIC__API_KEY

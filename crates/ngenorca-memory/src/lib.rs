@@ -19,9 +19,17 @@ pub mod semantic;
 pub mod working;
 
 use ngenorca_core::Result;
+use ngenorca_core::orchestration::{TaskClassification, TaskIntent};
 use ngenorca_core::types::UserId;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone, Copy)]
+struct RetrievalProfile {
+    semantic_fraction: usize,
+    episodic_fraction: usize,
+    episodic_limit: usize,
+}
 
 /// The unified memory manager that coordinates all three tiers.
 pub struct MemoryManager {
@@ -59,13 +67,45 @@ impl MemoryManager {
         current_query: &str,
         token_budget: usize,
     ) -> Result<ContextPack> {
+        let profile = RetrievalProfile {
+            semantic_fraction: 4,
+            episodic_fraction: 4,
+            episodic_limit: 5,
+        };
+        self.build_context_with_profile(user_id, session_id, current_query, token_budget, profile)
+    }
+
+    /// Build context with retrieval behavior adapted to the classified task.
+    pub fn build_context_for_task(
+        &self,
+        user_id: &UserId,
+        session_id: &ngenorca_core::SessionId,
+        current_query: &str,
+        classification: &TaskClassification,
+        token_budget: usize,
+    ) -> Result<ContextPack> {
+        let profile = retrieval_profile(classification);
+        let query = augmented_query(current_query, classification);
+        self.build_context_with_profile(user_id, session_id, &query, token_budget, profile)
+    }
+
+    fn build_context_with_profile(
+        &self,
+        user_id: &UserId,
+        session_id: &ngenorca_core::SessionId,
+        current_query: &str,
+        token_budget: usize,
+        profile: RetrievalProfile,
+    ) -> Result<ContextPack> {
         // Tier 3: Semantic memory — compact facts about this user.
-        let semantic_facts = self.semantic.retrieve_for_user(user_id, token_budget / 4)?;
+        let semantic_budget = token_budget / profile.semantic_fraction.max(1);
+        let episodic_budget = token_budget / profile.episodic_fraction.max(1);
+        let semantic_facts = self.semantic.retrieve_for_user(user_id, semantic_budget)?;
 
         // Tier 2: Episodic memory — relevant past conversations.
         let episodic_results = self
             .episodic
-            .search(user_id, current_query, 5, token_budget / 4)?;
+            .search(user_id, current_query, profile.episodic_limit, episodic_budget)?;
 
         // Tier 1: Working memory — current session context.
         let working_messages = self.working.get_session(session_id);
@@ -330,6 +370,64 @@ impl MemoryManager {
     }
 }
 
+fn retrieval_profile(classification: &TaskClassification) -> RetrievalProfile {
+    match classification.intent {
+        TaskIntent::QuestionAnswering | TaskIntent::Conversation => RetrievalProfile {
+            semantic_fraction: 5,
+            episodic_fraction: 5,
+            episodic_limit: 3,
+        },
+        TaskIntent::Summarization | TaskIntent::Translation | TaskIntent::Extraction => {
+            RetrievalProfile {
+                semantic_fraction: 5,
+                episodic_fraction: 3,
+                episodic_limit: 4,
+            }
+        }
+        TaskIntent::Coding | TaskIntent::ToolUse => RetrievalProfile {
+            semantic_fraction: 3,
+            episodic_fraction: 3,
+            episodic_limit: 6,
+        },
+        TaskIntent::Analysis | TaskIntent::Planning | TaskIntent::Reasoning => RetrievalProfile {
+            semantic_fraction: 4,
+            episodic_fraction: 2,
+            episodic_limit: 8,
+        },
+        TaskIntent::Creative => RetrievalProfile {
+            semantic_fraction: 5,
+            episodic_fraction: 2,
+            episodic_limit: 6,
+        },
+        TaskIntent::Vision | TaskIntent::Unknown | TaskIntent::Custom(_) => RetrievalProfile {
+            semantic_fraction: 4,
+            episodic_fraction: 4,
+            episodic_limit: 5,
+        },
+    }
+}
+
+fn augmented_query(current_query: &str, classification: &TaskClassification) -> String {
+    if classification.domain_tags.is_empty() {
+        return current_query.to_string();
+    }
+
+    match classification.intent {
+        TaskIntent::Coding | TaskIntent::ToolUse => format!(
+            "{current_query}\nrelated domains: {}\nfocus on prior technical preferences, scripts, commands, and fixes",
+            classification.domain_tags.join(", ")
+        ),
+        TaskIntent::Analysis | TaskIntent::Planning | TaskIntent::Reasoning => format!(
+            "{current_query}\nrelated domains: {}\nfocus on prior decisions, plans, constraints, and investigations",
+            classification.domain_tags.join(", ")
+        ),
+        _ => format!(
+            "{current_query}\nrelated domains: {}",
+            classification.domain_tags.join(", ")
+        ),
+    }
+}
+
 /// Packed context ready for injection into an LLM prompt.
 #[derive(Debug, Clone)]
 pub struct ContextPack {
@@ -501,5 +599,38 @@ mod tests {
             .unwrap();
         assert_eq!(result.entries_scanned, 0);
         assert_eq!(result.facts_created, 0);
+    }
+
+    #[test]
+    fn build_context_for_coding_uses_augmented_query() {
+        let mm = test_memory();
+        let uid = UserId("alice".into());
+        let sid = ngenorca_core::SessionId::new();
+        mm.episodic
+            .store(&episodic::EpisodicEntry {
+                id: 0,
+                user_id: uid.0.clone(),
+                content: "Previously fixed a rust cargo build script issue".into(),
+                summary: None,
+                channel: "webchat".into(),
+                timestamp: chrono::Utc::now(),
+                embedding: None,
+                relevance_score: 0.0,
+            })
+            .unwrap();
+
+        let classification = TaskClassification {
+            intent: TaskIntent::Coding,
+            complexity: ngenorca_core::orchestration::TaskComplexity::Moderate,
+            confidence: 0.9,
+            method: ngenorca_core::orchestration::ClassificationMethod::RuleBased,
+            domain_tags: vec!["rust".into()],
+            language: Some("en".into()),
+        };
+
+        let ctx = mm
+            .build_context_for_task(&uid, &sid, "fix build script", &classification, 512)
+            .unwrap();
+        assert!(!ctx.episodic_snippets.is_empty());
     }
 }

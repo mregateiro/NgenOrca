@@ -1,7 +1,9 @@
 //! SQLite WAL-backed durable event log.
 
+use chrono::{DateTime, Utc};
 use ngenorca_core::event::Event;
 use ngenorca_core::{Error, EventId, Result, SessionId};
+use crate::EventQuery;
 use rusqlite::{Connection, params};
 use std::sync::Mutex;
 use tracing::debug;
@@ -120,38 +122,83 @@ impl EventLog {
             params_vec.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                let id: String = row.get(0)?;
-                let timestamp: String = row.get(1)?;
-                let session_id: Option<String> = row.get(2)?;
-                let user_id: Option<String> = row.get(3)?;
-                let payload: String = row.get(4)?;
-                Ok((id, timestamp, session_id, user_id, payload))
-            })
+            .query_map(param_refs.as_slice(), decode_event_row)
             .map_err(|e| Error::Database(e.to_string()))?;
 
-        let mut events = Vec::new();
-        for row in rows {
-            let (id, timestamp, session_id, user_id, payload) =
-                row.map_err(|e| Error::Database(e.to_string()))?;
+        collect_events(rows)
+    }
 
-            let event = Event {
-                id: EventId(
-                    id.parse()
-                        .map_err(|e: ulid::DecodeError| Error::Database(e.to_string()))?,
-                ),
-                timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
-                    .map_err(|e| Error::Database(e.to_string()))?
-                    .with_timezone(&chrono::Utc),
-                session_id: session_id
-                    .map(|s| SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())),
-                user_id: user_id.map(ngenorca_core::UserId),
-                payload: serde_json::from_str(&payload)
-                    .map_err(|e| Error::Database(e.to_string()))?,
-            };
-            events.push(event);
+    /// Query events using durable filters for longer-horizon operator diagnostics.
+    pub fn query_filtered(&self, query: &EventQuery) -> Result<Vec<Event>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut sql = String::from(
+            "SELECT id, timestamp, session_id, user_id, payload FROM events WHERE 1=1",
+        );
+        let mut params_vec: Vec<rusqlite::types::Value> = Vec::new();
+
+        if let Some(session_id) = query.session_id.as_ref() {
+            sql.push_str(" AND session_id = ?");
+            sql.push_str(&(params_vec.len() + 1).to_string());
+            params_vec.push(rusqlite::types::Value::Text(session_id.0.to_string()));
+        }
+        if let Some(user_id) = query.user_id.as_ref() {
+            sql.push_str(" AND user_id = ?");
+            sql.push_str(&(params_vec.len() + 1).to_string());
+            params_vec.push(rusqlite::types::Value::Text(user_id.0.clone()));
+        }
+        if let Some(since) = query.since.as_ref() {
+            sql.push_str(" AND timestamp >= ?");
+            sql.push_str(&(params_vec.len() + 1).to_string());
+            params_vec.push(rusqlite::types::Value::Text(since.to_rfc3339()));
+        }
+        if let Some(until) = query.until.as_ref() {
+            sql.push_str(" AND timestamp <= ?");
+            sql.push_str(&(params_vec.len() + 1).to_string());
+            params_vec.push(rusqlite::types::Value::Text(until.to_rfc3339()));
         }
 
+        sql.push_str(" ORDER BY timestamp ASC, id ASC");
+
+        if let Some(limit) = query.limit {
+            sql.push_str(" LIMIT ?");
+            sql.push_str(&(params_vec.len() + 1).to_string());
+            params_vec.push(rusqlite::types::Value::Integer(limit as i64));
+        }
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params_vec.iter()), decode_event_row)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        collect_events(rows)
+    }
+
+    /// Query the most recent events, newest-first in storage and returned oldest-first for stable aggregation.
+    pub fn query_recent(&self, limit: usize) -> Result<Vec<Event>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, timestamp, session_id, user_id, payload
+                 FROM events ORDER BY id DESC LIMIT ?1",
+            )
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![limit as i64], decode_event_row)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut events = collect_events(rows)?;
+        events.reverse();
         Ok(events)
     }
 
@@ -171,39 +218,10 @@ impl EventLog {
             .map_err(|e| Error::Database(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![after_id.0.to_string()], |row| {
-                let id: String = row.get(0)?;
-                let timestamp: String = row.get(1)?;
-                let session_id: Option<String> = row.get(2)?;
-                let user_id: Option<String> = row.get(3)?;
-                let payload: String = row.get(4)?;
-                Ok((id, timestamp, session_id, user_id, payload))
-            })
+            .query_map(params![after_id.0.to_string()], decode_event_row)
             .map_err(|e| Error::Database(e.to_string()))?;
 
-        let mut events = Vec::new();
-        for row in rows {
-            let (id, timestamp, session_id, user_id, payload) =
-                row.map_err(|e| Error::Database(e.to_string()))?;
-
-            let event = Event {
-                id: EventId(
-                    id.parse()
-                        .map_err(|e: ulid::DecodeError| Error::Database(e.to_string()))?,
-                ),
-                timestamp: chrono::DateTime::parse_from_rfc3339(&timestamp)
-                    .map_err(|e| Error::Database(e.to_string()))?
-                    .with_timezone(&chrono::Utc),
-                session_id: session_id
-                    .map(|s| SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())),
-                user_id: user_id.map(ngenorca_core::UserId),
-                payload: serde_json::from_str(&payload)
-                    .map_err(|e| Error::Database(e.to_string()))?,
-            };
-            events.push(event);
-        }
-
-        Ok(events)
+        collect_events(rows)
     }
 
     /// Get total event count.
@@ -232,6 +250,46 @@ impl EventLog {
             .map_err(|e| Error::Database(e.to_string()))?;
         Ok(deleted)
     }
+}
+
+type EventRow = (String, String, Option<String>, Option<String>, String);
+
+fn decode_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EventRow> {
+    let id: String = row.get(0)?;
+    let timestamp: String = row.get(1)?;
+    let session_id: Option<String> = row.get(2)?;
+    let user_id: Option<String> = row.get(3)?;
+    let payload: String = row.get(4)?;
+    Ok((id, timestamp, session_id, user_id, payload))
+}
+
+fn collect_events<F>(rows: rusqlite::MappedRows<'_, F>) -> Result<Vec<Event>>
+where
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<EventRow>,
+{
+    let mut events = Vec::new();
+    for row in rows {
+        let (id, timestamp, session_id, user_id, payload) =
+            row.map_err(|e| Error::Database(e.to_string()))?;
+
+        let event = Event {
+            id: EventId(
+                id.parse()
+                    .map_err(|e: ulid::DecodeError| Error::Database(e.to_string()))?,
+            ),
+            timestamp: DateTime::parse_from_rfc3339(&timestamp)
+                .map_err(|e| Error::Database(e.to_string()))?
+                .with_timezone(&Utc),
+            session_id: session_id
+                .map(|s| SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())),
+            user_id: user_id.map(ngenorca_core::UserId),
+            payload: serde_json::from_str(&payload)
+                .map_err(|e| Error::Database(e.to_string()))?,
+        };
+        events.push(event);
+    }
+
+    Ok(events)
 }
 
 #[cfg(test)]
@@ -347,5 +405,48 @@ mod tests {
         assert_eq!(events[0].id, original_id);
         assert_eq!(events[0].session_id, Some(sid));
         assert_eq!(events[0].user_id, Some(uid));
+    }
+
+    #[test]
+    fn query_filtered_respects_user_and_time_window() {
+        let log = EventLog::new(":memory:").unwrap();
+
+        let older = Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now() - chrono::Duration::hours(72),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("alice".into())),
+            payload: EventPayload::SessionCreated {
+                session_id: SessionId::new(),
+                user_id: Some(UserId("alice".into())),
+            },
+        };
+        log.append(&older).unwrap();
+
+        let recent = Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("bob".into())),
+            payload: EventPayload::SessionCreated {
+                session_id: SessionId::new(),
+                user_id: Some(UserId("bob".into())),
+            },
+        };
+        let recent_id = recent.id.clone();
+        log.append(&recent).unwrap();
+
+        let filtered = log
+            .query_filtered(&EventQuery {
+                user_id: Some(UserId("bob".into())),
+                since: Some(chrono::Utc::now() - chrono::Duration::hours(24)),
+                limit: Some(10),
+                ..EventQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, recent_id);
+        assert_eq!(filtered[0].user_id, Some(UserId("bob".into())));
     }
 }
