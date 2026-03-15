@@ -423,6 +423,14 @@ fn sandboxed_output(
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn stderr_contains_any(stderr: &str, needles: &[&str]) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    needles
+        .iter()
+        .any(|needle| stderr.contains(&needle.to_ascii_lowercase()))
+}
+
 /// Direct execution (used inside containers or as fallback).
 async fn exec_direct(
     command: &str,
@@ -763,27 +771,47 @@ async fn exec_linux_sandboxed(
     let result = tokio::time::timeout(timeout, cmd.output()).await;
 
     match result {
-        Ok(Ok(output)) => Ok(sandboxed_output(
-            String::from_utf8_lossy(&output.stdout).to_string(),
-            String::from_utf8_lossy(&output.stderr).to_string(),
-            output.status.code().unwrap_or(-1),
-            false,
-            build_sandbox_audit(
-                SandboxEnvironment::Linux,
-                "linux_unshare",
-                policy,
-                true,
-                &[
-                    "namespace_isolation",
-                    "wall_timeout",
-                    "process_limit",
-                    "memory_limit",
-                    "cpu_limit",
-                    "network_policy",
-                ],
-                None,
-            ),
-        )),
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if !output.status.success()
+                && stderr_contains_any(
+                    &stderr,
+                    &[
+                        "unshare failed",
+                        "operation not permitted",
+                        "permission denied",
+                        "invalid argument",
+                    ],
+                )
+            {
+                warn!(stderr = %stderr, "unshare backend rejected sandbox setup, falling back to prlimit");
+                return exec_linux_prlimit(command, args, cwd, policy).await;
+            }
+
+            Ok(sandboxed_output(
+                stdout,
+                stderr,
+                output.status.code().unwrap_or(-1),
+                false,
+                build_sandbox_audit(
+                    SandboxEnvironment::Linux,
+                    "linux_unshare",
+                    policy,
+                    true,
+                    &[
+                        "namespace_isolation",
+                        "wall_timeout",
+                        "process_limit",
+                        "memory_limit",
+                        "cpu_limit",
+                        "network_policy",
+                    ],
+                    None,
+                ),
+            ))
+        }
         Ok(Err(e)) => {
             // If unshare fails (e.g., insufficient privileges), fall back to prlimit only
             warn!(error = %e, "unshare failed, falling back to prlimit");
@@ -1019,25 +1047,59 @@ async fn exec_macos_sandboxed(
     let _ = std::fs::remove_file(&profile_path);
 
     match result {
-        Ok(Ok(output)) => Ok(sandboxed_output(
-            String::from_utf8_lossy(&output.stdout).to_string(),
-            String::from_utf8_lossy(&output.stderr).to_string(),
-            output.status.code().unwrap_or(-1),
-            false,
-            build_sandbox_audit(
-                SandboxEnvironment::MacOs,
-                "macos_sandbox_exec",
-                policy,
-                true,
-                &[
-                    "seatbelt_profile",
-                    "wall_timeout",
-                    "filesystem_policy",
-                    "network_policy",
-                ],
-                None,
-            ),
-        )),
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if !output.status.success()
+                && stderr_contains_any(
+                    &stderr,
+                    &[
+                        "sandbox-exec:",
+                        "operation not permitted",
+                        "permission denied",
+                        "no such file or directory",
+                    ],
+                )
+            {
+                warn!(stderr = %stderr, "sandbox-exec backend rejected sandbox setup, falling back to direct execution");
+                return exec_direct(
+                    command,
+                    args,
+                    cwd,
+                    policy,
+                    build_sandbox_audit(
+                        SandboxEnvironment::MacOs,
+                        "direct",
+                        policy,
+                        false,
+                        &["wall_timeout"],
+                        Some("sandbox-exec backend rejected the generated profile or command; falling back to direct execution".into()),
+                    ),
+                )
+                .await;
+            }
+
+            Ok(sandboxed_output(
+                stdout,
+                stderr,
+                output.status.code().unwrap_or(-1),
+                false,
+                build_sandbox_audit(
+                    SandboxEnvironment::MacOs,
+                    "macos_sandbox_exec",
+                    policy,
+                    true,
+                    &[
+                        "seatbelt_profile",
+                        "wall_timeout",
+                        "filesystem_policy",
+                        "network_policy",
+                    ],
+                    None,
+                ),
+            ))
+        }
         Ok(Err(e)) => {
             warn!(error = %e, "sandbox-exec failed, falling back to basic exec");
             exec_direct(

@@ -431,10 +431,12 @@ const JWKS_CACHE_TTL_SECS: u64 = 3600;
 /// Module-level JWKS cache — lazily initialised, shared across all requests.
 static JWKS_CACHE: std::sync::LazyLock<tokio::sync::RwLock<JwksCacheInner>> =
     std::sync::LazyLock::new(|| {
+        let fetched_at = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(JWKS_CACHE_TTL_SECS + 1))
+            .unwrap_or_else(std::time::Instant::now);
         tokio::sync::RwLock::new(JwksCacheInner {
             keys: None,
-            fetched_at: std::time::Instant::now()
-                - std::time::Duration::from_secs(JWKS_CACHE_TTL_SECS + 1),
+            fetched_at,
         })
     });
 
