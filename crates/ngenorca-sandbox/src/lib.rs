@@ -434,6 +434,50 @@ fn stderr_contains_any(stderr: &str, needles: &[&str]) -> bool {
         .any(|needle| stderr.contains(&needle.to_ascii_lowercase()))
 }
 
+#[cfg(target_os = "linux")]
+fn is_prlimit_wrapper_failure(stderr: &str, exit_code: Option<i32>) -> bool {
+    exit_code != Some(0)
+        && stderr_contains_any(
+            stderr,
+            &[
+                "prlimit:",
+                "failed to set",
+                "failed to execute",
+                "operation not permitted",
+                "permission denied",
+                "invalid argument",
+                "no such file or directory",
+            ],
+        )
+}
+
+#[cfg(target_os = "macos")]
+fn push_unique_path_variant(values: &mut Vec<String>, path: &std::path::Path) {
+    let candidate = path.to_string_lossy().to_string();
+    if !candidate.is_empty() && !values.iter().any(|existing| existing == &candidate) {
+        values.push(candidate);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn path_variants(path: &std::path::Path) -> Vec<String> {
+    let mut variants = Vec::new();
+    push_unique_path_variant(&mut variants, path);
+
+    if let Ok(canonical) = path.canonicalize() {
+        push_unique_path_variant(&mut variants, &canonical);
+    }
+
+    variants
+}
+
+#[cfg(target_os = "macos")]
+fn allow_profile_paths(profile: &mut String, rule: &str, paths: &[String]) {
+    for path in paths {
+        profile.push_str(&format!("(allow {rule} (subpath \"{}\"))\n", path));
+    }
+}
+
 fn resolve_command_path(command: &str) -> std::path::PathBuf {
     let command_path = std::path::Path::new(command);
     if command_path.is_absolute() || command_path.components().count() > 1 {
@@ -948,26 +992,50 @@ async fn exec_linux_prlimit(
     let result = tokio::time::timeout(timeout, cmd.output()).await;
 
     match result {
-        Ok(Ok(output)) => Ok(sandboxed_output(
-            String::from_utf8_lossy(&output.stdout).to_string(),
-            String::from_utf8_lossy(&output.stderr).to_string(),
-            output.status.code().unwrap_or(-1),
-            false,
-            build_sandbox_audit(
-                SandboxEnvironment::Linux,
-                "linux_prlimit",
-                policy,
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if is_prlimit_wrapper_failure(&stderr, output.status.code()) {
+                warn!(stderr = %stderr, "prlimit backend rejected sandbox setup, falling back to direct execution");
+                return exec_direct(
+                    command,
+                    args,
+                    cwd,
+                    policy,
+                    build_sandbox_audit(
+                        SandboxEnvironment::Linux,
+                        "direct",
+                        policy,
+                        false,
+                        &["wall_timeout"],
+                        Some("prlimit backend rejected sandbox setup; falling back to direct execution".into()),
+                    ),
+                )
+                .await;
+            }
+
+            Ok(sandboxed_output(
+                stdout,
+                stderr,
+                output.status.code().unwrap_or(-1),
                 false,
-                &[
-                    "prlimit",
-                    "wall_timeout",
-                    "process_limit",
-                    "memory_limit",
-                    "cpu_limit",
-                ],
-                Some("namespace isolation unavailable; using prlimit-only enforcement".into()),
-            ),
-        )),
+                build_sandbox_audit(
+                    SandboxEnvironment::Linux,
+                    "linux_prlimit",
+                    policy,
+                    false,
+                    &[
+                        "prlimit",
+                        "wall_timeout",
+                        "process_limit",
+                        "memory_limit",
+                        "cpu_limit",
+                    ],
+                    Some("namespace isolation unavailable; using prlimit-only enforcement".into()),
+                ),
+            ))
+        }
         Ok(Err(e)) => Err(Error::Sandbox(format!("prlimit exec failed: {e}"))),
         Err(_) => Ok(sandboxed_output(
             String::new(),
@@ -1015,6 +1083,56 @@ async fn exec_macos_sandboxed(
 
     // Generate a Seatbelt profile (SBPL)
     let mut profile = String::from("(version 1)\n(deny default)\n");
+    let mut allowed_read_paths = Vec::new();
+    let mut allowed_write_paths = Vec::new();
+
+    for variant in path_variants(std::path::Path::new(command)) {
+        if !allowed_read_paths
+            .iter()
+            .any(|existing| existing == &variant)
+        {
+            allowed_read_paths.push(variant);
+        }
+    }
+
+    for path in &policy.allow_read_paths {
+        for variant in path_variants(std::path::Path::new(path)) {
+            if !allowed_read_paths
+                .iter()
+                .any(|existing| existing == &variant)
+            {
+                allowed_read_paths.push(variant);
+            }
+        }
+    }
+
+    for path in &policy.allow_write_paths {
+        for variant in path_variants(std::path::Path::new(path)) {
+            if !allowed_write_paths
+                .iter()
+                .any(|existing| existing == &variant)
+            {
+                allowed_write_paths.push(variant);
+            }
+        }
+    }
+
+    if let Some(cwd) = cwd {
+        for variant in path_variants(cwd) {
+            if !allowed_read_paths
+                .iter()
+                .any(|existing| existing == &variant)
+            {
+                allowed_read_paths.push(variant.clone());
+            }
+            if !allowed_write_paths
+                .iter()
+                .any(|existing| existing == &variant)
+            {
+                allowed_write_paths.push(variant);
+            }
+        }
+    }
 
     // Always allow basic operations
     profile.push_str("(allow process-exec*)\n");
@@ -1024,7 +1142,7 @@ async fn exec_macos_sandboxed(
     profile.push_str("(allow signal (target self))\n");
 
     // File read access
-    if policy.allow_read_paths.is_empty() {
+    if allowed_read_paths.is_empty() {
         // Allow reading system libraries and common paths
         profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
         profile.push_str("(allow file-read* (subpath \"/usr/share\"))\n");
@@ -1034,18 +1152,17 @@ async fn exec_macos_sandboxed(
         // Allow reading the command binary itself
         profile.push_str(&format!("(allow file-read* (literal \"{}\"))\n", command));
     } else {
-        for path in &policy.allow_read_paths {
-            profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path));
-        }
+        allow_profile_paths(&mut profile, "file-read*", &allowed_read_paths);
         // Always allow system libs
         profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
+        profile.push_str("(allow file-read* (subpath \"/usr/share\"))\n");
         profile.push_str("(allow file-read* (subpath \"/System\"))\n");
+        profile.push_str("(allow file-read* (subpath \"/Library/Frameworks\"))\n");
+        profile.push_str("(allow file-read* (subpath \"/dev\"))\n");
     }
 
     // File write access
-    for path in &policy.allow_write_paths {
-        profile.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", path));
-    }
+    allow_profile_paths(&mut profile, "file-write*", &allowed_write_paths);
     // Allow writing to /dev/null, /dev/tty
     profile.push_str("(allow file-write* (subpath \"/dev\"))\n");
 
