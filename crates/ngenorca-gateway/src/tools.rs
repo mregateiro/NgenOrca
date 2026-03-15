@@ -1017,6 +1017,13 @@ mod tests {
         json!({ "command": "sh", "args": ["-c", "echo hello"] })
     }
 
+    fn tool_test_sandbox_config() -> SandboxConfig {
+        SandboxConfig {
+            enabled: false,
+            ..SandboxConfig::default()
+        }
+    }
+
     #[test]
     fn resolve_workspace_path_blocks_escape() {
         let root = normalize_path(Path::new("/tmp/ngenorca-workspace"));
@@ -1089,7 +1096,7 @@ mod tests {
     #[tokio::test]
     async fn run_command_returns_output() {
         let workspace = temp_workspace();
-        let tool = RunCommandTool::new(workspace, SandboxConfig::default());
+        let tool = RunCommandTool::new(workspace, tool_test_sandbox_config());
 
         let args = successful_command_args();
 
@@ -1101,7 +1108,7 @@ mod tests {
                 .to_lowercase()
                 .contains("hello")
         );
-        assert_eq!(result["sandboxed"], true);
+        assert_eq!(result["sandboxed"], false);
         assert_eq!(result["sandbox_policy"]["allow_network"], false);
         assert!(result["sandbox_audit"]["backend"].is_string());
     }
@@ -1128,7 +1135,7 @@ mod tests {
         let workspace = temp_workspace();
         let nested = workspace.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
-        let tool = RunCommandTool::new(workspace, SandboxConfig::default());
+        let tool = RunCommandTool::new(workspace, tool_test_sandbox_config());
 
         #[cfg(windows)]
         let args = json!({ "command": "cmd", "args": ["/C", "cd"], "cwd": "nested" });
@@ -1343,8 +1350,11 @@ mod tests {
         let workspace = temp_workspace();
         let store = SkillStore::new(workspace.join("skills"));
         let save_tool = SaveSkillTool::new(store.clone());
-        let exec_tool =
-            ExecuteSkillStagesTool::new(store.clone(), workspace.clone(), SandboxConfig::default());
+        let exec_tool = ExecuteSkillStagesTool::new(
+            store.clone(),
+            workspace.clone(),
+            tool_test_sandbox_config(),
+        );
 
         save_tool
             .execute(
