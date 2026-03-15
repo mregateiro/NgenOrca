@@ -17,7 +17,9 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 version = 2
 unmaintained = "workspace"
 yanked = "warn"
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "NgenOrca only uses jsonwebtoken for public-key JWT verification in the Teams adapter and does not perform vulnerable RSA private-key operations." },
+]
 
 # ── License allow-list ───────────────────────────────────
 [licenses]
