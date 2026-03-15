@@ -98,19 +98,18 @@ fn is_container() -> bool {
     // Check cgroup for container hints (Linux).
     #[cfg(target_os = "linux")]
     {
-        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
-            if cgroup.contains("docker")
+        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup")
+            && (cgroup.contains("docker")
                 || cgroup.contains("kubepods")
-                || cgroup.contains("containerd")
-            {
-                return true;
-            }
+                || cgroup.contains("containerd"))
+        {
+            return true;
         }
         // systemd-based container detection.
-        if let Ok(env) = std::fs::read_to_string("/proc/1/environ") {
-            if env.contains("container=") {
-                return true;
-            }
+        if let Ok(env) = std::fs::read_to_string("/proc/1/environ")
+            && env.contains("container=")
+        {
+            return true;
         }
     }
 
