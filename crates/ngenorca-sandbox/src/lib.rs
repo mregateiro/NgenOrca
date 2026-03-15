@@ -1342,12 +1342,24 @@ mod tests {
 
     #[test]
     fn detect_environment_returns_windows() {
-        // We're running on Windows, so unless inside Docker this should be Windows
         let env = detect_environment();
-        // On CI/container this might be Container, but on native Windows:
+
+        #[cfg(windows)]
         assert!(
             env == SandboxEnvironment::Windows || env == SandboxEnvironment::Container,
             "Expected Windows or Container, got {env:?}"
+        );
+
+        #[cfg(target_os = "linux")]
+        assert!(
+            env == SandboxEnvironment::Linux || env == SandboxEnvironment::Container,
+            "Expected Linux or Container, got {env:?}"
+        );
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            env == SandboxEnvironment::MacOs || env == SandboxEnvironment::Container,
+            "Expected MacOs or Container, got {env:?}"
         );
     }
 
@@ -1450,8 +1462,13 @@ mod tests {
     #[tokio::test]
     async fn exec_echo_succeeds() {
         let policy = SandboxPolicy::default();
-        // On Windows, use cmd /C echo
+
+        #[cfg(windows)]
         let result = sandboxed_exec("cmd", &["/C", "echo", "hello"], &policy).await;
+
+        #[cfg(not(windows))]
+        let result = sandboxed_exec("sh", &["-c", "echo hello"], &policy).await;
+
         assert!(result.is_ok());
         let output = result.unwrap();
         assert_eq!(output.exit_code, 0);
@@ -1473,8 +1490,13 @@ mod tests {
             wall_timeout_secs: 1,
             ..SandboxPolicy::default()
         };
-        // "ping -n 30 127.0.0.1" will take ~30 seconds on Windows
+
+        #[cfg(windows)]
         let result = sandboxed_exec("ping", &["-n", "30", "127.0.0.1"], &policy).await;
+
+        #[cfg(not(windows))]
+        let result = sandboxed_exec("sh", &["-c", "sleep 5"], &policy).await;
+
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.timed_out);
