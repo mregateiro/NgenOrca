@@ -132,6 +132,8 @@ pub async fn sandboxed_exec_with_cwd(
     cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
+    let resolved_command = resolve_command_path(command);
+    let resolved_command = resolved_command.to_string_lossy().to_string();
     let env = detect_environment();
 
     info!(?env, command, "Executing in sandbox");
@@ -141,7 +143,7 @@ pub async fn sandboxed_exec_with_cwd(
             // Inside a container, the container IS the sandbox.
             // Just run the command directly.
             exec_direct(
-                command,
+                &resolved_command,
                 args,
                 cwd,
                 policy,
@@ -160,13 +162,13 @@ pub async fn sandboxed_exec_with_cwd(
             // Use Windows Job Objects.
             #[cfg(windows)]
             {
-                exec_windows_job(command, args, cwd, policy).await
+                exec_windows_job(&resolved_command, args, cwd, policy).await
             }
             #[cfg(not(windows))]
             {
                 warn!("Windows sandbox not available on this platform");
                 exec_direct(
-                    command,
+                    &resolved_command,
                     args,
                     cwd,
                     policy,
@@ -185,13 +187,13 @@ pub async fn sandboxed_exec_with_cwd(
         SandboxEnvironment::Linux => {
             #[cfg(target_os = "linux")]
             {
-                exec_linux_sandboxed(command, args, cwd, policy).await
+                exec_linux_sandboxed(&resolved_command, args, cwd, policy).await
             }
             #[cfg(not(target_os = "linux"))]
             {
                 warn!("Linux sandbox not available on this platform");
                 exec_direct(
-                    command,
+                    &resolved_command,
                     args,
                     cwd,
                     policy,
@@ -210,13 +212,13 @@ pub async fn sandboxed_exec_with_cwd(
         SandboxEnvironment::MacOs => {
             #[cfg(target_os = "macos")]
             {
-                exec_macos_sandboxed(command, args, cwd, policy).await
+                exec_macos_sandboxed(&resolved_command, args, cwd, policy).await
             }
             #[cfg(not(target_os = "macos"))]
             {
                 warn!("macOS sandbox not available on this platform");
                 exec_direct(
-                    command,
+                    &resolved_command,
                     args,
                     cwd,
                     policy,
@@ -235,7 +237,7 @@ pub async fn sandboxed_exec_with_cwd(
         SandboxEnvironment::Unknown => {
             warn!("Unknown platform, running without sandbox");
             exec_direct(
-                command,
+                &resolved_command,
                 args,
                 cwd,
                 policy,
@@ -347,8 +349,9 @@ pub async fn unsandboxed_exec_with_cwd(
     cwd: Option<&std::path::Path>,
     policy: &SandboxPolicy,
 ) -> Result<SandboxedOutput> {
+    let resolved_command = resolve_command_path(command);
     exec_direct(
-        command,
+        resolved_command.to_string_lossy().as_ref(),
         args,
         cwd,
         policy,
@@ -429,6 +432,61 @@ fn stderr_contains_any(stderr: &str, needles: &[&str]) -> bool {
     needles
         .iter()
         .any(|needle| stderr.contains(&needle.to_ascii_lowercase()))
+}
+
+fn resolve_command_path(command: &str) -> std::path::PathBuf {
+    let command_path = std::path::Path::new(command);
+    if command_path.is_absolute() || command_path.components().count() > 1 {
+        return command_path.to_path_buf();
+    }
+
+    let Some(path_env) = std::env::var_os("PATH") else {
+        return command_path.to_path_buf();
+    };
+
+    #[cfg(windows)]
+    let path_exts = {
+        let configured = std::env::var_os("PATHEXT")
+            .map(|value| {
+                value
+                    .to_string_lossy()
+                    .split(';')
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| entry.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![".com".into(), ".exe".into(), ".bat".into(), ".cmd".into()]);
+        let mut extensions = vec![String::new()];
+        extensions.extend(configured);
+        extensions
+    };
+
+    for directory in std::env::split_paths(&path_env) {
+        #[cfg(windows)]
+        {
+            for extension in &path_exts {
+                let candidate = if extension.is_empty() || command_path.extension().is_some() {
+                    directory.join(command)
+                } else {
+                    directory.join(format!("{command}{extension}"))
+                };
+
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            let candidate = directory.join(command);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    command_path.to_path_buf()
 }
 
 /// Direct execution (used inside containers or as fallback).
