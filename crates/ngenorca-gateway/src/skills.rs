@@ -174,9 +174,8 @@ pub fn validate_skill_artifact(skill: &SkillArtifact) -> SkillValidationReport {
     let executable = !risky_tools.is_empty();
     let mut warnings = Vec::new();
     if executable && skill.constraints.is_empty() {
-        warnings.push(
-            "Executable automations should declare at least one explicit constraint.".into(),
-        );
+        warnings
+            .push("Executable automations should declare at least one explicit constraint.".into());
     }
     if !missing_verification_steps.is_empty() {
         warnings.push(
@@ -191,10 +190,7 @@ pub fn validate_skill_artifact(skill: &SkillArtifact) -> SkillValidationReport {
         );
     }
     if skill.steps.iter().any(|step| {
-        step.tool
-            .as_deref()
-            .is_some_and(is_executable_tool)
-            && step.checkpoints.is_empty()
+        step.tool.as_deref().is_some_and(is_executable_tool) && step.checkpoints.is_empty()
     }) {
         warnings.push(
             "Executable steps should define checkpoints so staged execution can expose visible progress."
@@ -238,7 +234,8 @@ pub fn validate_skill_artifact(skill: &SkillArtifact) -> SkillValidationReport {
             risky_tools.join(", ")
         )
     } else {
-        "This skill is advisory-only and can be reviewed as a reusable planning/reference artifact.".into()
+        "This skill is advisory-only and can be reviewed as a reusable planning/reference artifact."
+            .into()
     };
 
     SkillValidationReport {
@@ -286,7 +283,10 @@ pub fn synthesize_skill_script(skill: &SkillArtifact) -> Option<SkillScriptPrevi
         if let Some(step_id) = step.step_id.as_deref() {
             lines.push(format!("# Step ID: {}", step_id));
         }
-        lines.push(format!("echo {}", shell_quote(&format!("Step {}: {}", index + 1, step.title))));
+        lines.push(format!(
+            "echo {}",
+            shell_quote(&format!("Step {}: {}", index + 1, step.title))
+        ));
         if step.requires_confirmation {
             lines.push("# Confirmation required before executing this step.".into());
         }
@@ -307,18 +307,31 @@ pub fn synthesize_skill_script(skill: &SkillArtifact) -> Option<SkillScriptPrevi
                 }
             }
             Some(tool) => {
-                lines.push(format!("# Tool {} is referenced here: {}", tool, step.instruction));
+                lines.push(format!(
+                    "# Tool {} is referenced here: {}",
+                    tool, step.instruction
+                ));
             }
             None => lines.push(format!("# {}", step.instruction)),
         }
 
-        if let Some(verification) = step.verification.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(verification) = step
+            .verification
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             lines.push(format!("# Verify: {}", verification));
         }
         for checkpoint in &step.checkpoints {
             lines.push(format!("# Checkpoint: {}", checkpoint));
         }
-        if let Some(rollback) = step.rollback.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(rollback) = step
+            .rollback
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             lines.push(format!("# Rollback: {}", rollback));
         }
         if !step.platform_hints.is_empty() {
@@ -398,7 +411,10 @@ pub fn synthesize_rollback_plan(
             } else if tool == "write_file" {
                 "Restore the last captured file snapshot before re-running later stages.".into()
             } else {
-                format!("Review step '{}' manually before re-running the automation.", step.title)
+                format!(
+                    "Review step '{}' manually before re-running the automation.",
+                    step.title
+                )
             };
 
             Some(SkillRollbackPlanEntry {
@@ -517,7 +533,9 @@ impl SkillStore {
     }
 
     pub fn save_execution_journal(&self, journal: &SkillExecutionJournal) -> Result<PathBuf> {
-        let path = self.execution_root().join(format!("{}.json", journal.journal_id));
+        let path = self
+            .execution_root()
+            .join(format!("{}.json", journal.journal_id));
         let content = serde_json::to_string_pretty(journal)?;
         std::fs::write(&path, content)?;
         Ok(path)
@@ -687,7 +705,10 @@ fn is_state_mutating_tool(tool: &str) -> bool {
 }
 
 fn is_risky_tool(tool: &str) -> bool {
-    matches!(tool, "run_command" | "write_file" | "fetch_url" | "web_search")
+    matches!(
+        tool,
+        "run_command" | "write_file" | "fetch_url" | "web_search"
+    )
 }
 
 fn approval_stage(
@@ -748,7 +769,10 @@ fn approval_checklist(
     }
 
     for step in missing_rollback_steps {
-        checklist.push(format!("Add rollback guidance for state-mutating step '{}'.", step));
+        checklist.push(format!(
+            "Add rollback guidance for state-mutating step '{}'.",
+            step
+        ));
     }
 
     if has_generated_script {
@@ -758,7 +782,9 @@ fn approval_checklist(
         checklist.push("Review the staged execution preview and confirm the checkpoint order matches the intended rollout.".into());
     }
     if has_rollback_plan {
-        checklist.push("Review the rollback plan in reverse order before any staged execution begins.".into());
+        checklist.push(
+            "Review the rollback plan in reverse order before any staged execution begins.".into(),
+        );
     }
 
     if requires_operator_review {
@@ -773,7 +799,9 @@ fn approval_checklist(
             checklist.push("Assign an operator reviewer in lifecycle.reviewed_by.".into());
         }
         if skill.lifecycle.review_notes.is_empty() {
-            checklist.push("Record review_notes that justify why this automation is safe to reuse.".into());
+            checklist.push(
+                "Record review_notes that justify why this automation is safe to reuse.".into(),
+            );
         }
     }
 
@@ -816,6 +844,35 @@ fn render_write_file(arguments: Option<&Value>) -> Option<String> {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace("'", "'\"'\"'"))
+}
+
+fn extract_write_file_target(arguments: Option<&Value>) -> Option<String> {
+    arguments?
+        .as_object()?
+        .get("path")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+pub fn new_skill_execution_journal_id(skill_name: &str) -> String {
+    format!(
+        "{}-{}-{}",
+        slugify(skill_name),
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    )
+}
+
+pub fn skill_execution_status_label(status: SkillExecutionStatus) -> &'static str {
+    match status {
+        SkillExecutionStatus::Planned => "planned",
+        SkillExecutionStatus::Running => "running",
+        SkillExecutionStatus::Completed => "completed",
+        SkillExecutionStatus::Failed => "failed",
+        SkillExecutionStatus::Manual => "manual",
+        SkillExecutionStatus::Skipped => "skipped",
+        SkillExecutionStatus::RolledBack => "rolled_back",
+    }
 }
 
 #[cfg(test)]
@@ -918,9 +975,7 @@ mod tests {
         skill.lifecycle.requires_operator_review = false;
 
         let err = store.save(&skill).unwrap_err();
-        assert!(
-            err.to_string().contains("reviewed_by") || err.to_string().contains("review note")
-        );
+        assert!(err.to_string().contains("reviewed_by") || err.to_string().contains("review note"));
     }
 
     #[test]
@@ -938,11 +993,40 @@ mod tests {
         assert_eq!(report.staged_execution.len(), 1);
         assert_eq!(report.rollback_plan.len(), 1);
         assert!(report.generated_script.is_some());
-        assert!(report.approval_checklist.iter().any(|item| item.contains("generated script preview")));
-        assert!(report.approval_checklist.iter().any(|item| item.contains("staged execution preview")));
-        assert!(report.approval_checklist.iter().any(|item| item.contains("rollback plan")));
-        assert!(report.generated_script.as_ref().unwrap().content.contains("cargo"));
-        assert!(report.generated_script.as_ref().unwrap().content.contains("Rollback"));
+        assert!(
+            report
+                .approval_checklist
+                .iter()
+                .any(|item| item.contains("generated script preview"))
+        );
+        assert!(
+            report
+                .approval_checklist
+                .iter()
+                .any(|item| item.contains("staged execution preview"))
+        );
+        assert!(
+            report
+                .approval_checklist
+                .iter()
+                .any(|item| item.contains("rollback plan"))
+        );
+        assert!(
+            report
+                .generated_script
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("cargo")
+        );
+        assert!(
+            report
+                .generated_script
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("Rollback")
+        );
     }
 
     #[test]
@@ -953,7 +1037,12 @@ mod tests {
 
         let report = validate_skill_artifact(&skill);
         assert_eq!(report.approval_stage, "ready-for-approval");
-        assert!(report.approval_checklist.iter().any(|item| item.contains("generated script preview")));
+        assert!(
+            report
+                .approval_checklist
+                .iter()
+                .any(|item| item.contains("generated script preview"))
+        );
     }
 
     #[test]
@@ -993,7 +1082,10 @@ mod tests {
         let rollback_plan = synthesize_rollback_plan(&skill, skill.steps.len());
         assert_eq!(rollback_plan.len(), 2);
         assert_eq!(rollback_plan[0].title, "Patch config");
-        assert_eq!(rollback_plan[0].target.as_deref(), Some("config/local.toml"));
+        assert_eq!(
+            rollback_plan[0].target.as_deref(),
+            Some("config/local.toml")
+        );
         assert_eq!(rollback_plan[0].strategy, "restore-file-snapshot");
     }
 
@@ -1052,44 +1144,19 @@ mod tests {
 
         let stored = store.get("Rust Build Fix").unwrap();
         assert_eq!(stored.lifecycle.execution_count, 1);
-        assert_eq!(stored.lifecycle.last_execution_status.as_deref(), Some("completed"));
-        assert_eq!(stored.lifecycle.last_checkpoint_at.as_deref(), Some(checkpoint_at.as_str()));
+        assert_eq!(
+            stored.lifecycle.last_execution_status.as_deref(),
+            Some("completed")
+        );
+        assert_eq!(
+            stored.lifecycle.last_checkpoint_at.as_deref(),
+            Some(checkpoint_at.as_str())
+        );
     }
 
     #[test]
     fn slugify_normalizes_skill_names() {
         assert_eq!(slugify("Rust Build Fix"), "rust-build-fix");
         assert_eq!(slugify("  Deploy_Checklist v2 "), "deploy-checklist-v2");
-    }
-}
-
-fn extract_write_file_target(arguments: Option<&Value>) -> Option<String> {
-    arguments?
-        .as_object()?
-        .get("path")?
-        .as_str()
-        .map(ToOwned::to_owned)
-}
-
-pub fn new_skill_execution_journal_id(skill_name: &str) -> String {
-    format!(
-        "{}-{}-{}",
-        slugify(skill_name),
-        std::process::id(),
-        chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or_default()
-    )
-}
-
-pub fn skill_execution_status_label(status: SkillExecutionStatus) -> &'static str {
-    match status {
-        SkillExecutionStatus::Planned => "planned",
-        SkillExecutionStatus::Running => "running",
-        SkillExecutionStatus::Completed => "completed",
-        SkillExecutionStatus::Failed => "failed",
-        SkillExecutionStatus::Manual => "manual",
-        SkillExecutionStatus::Skipped => "skipped",
-        SkillExecutionStatus::RolledBack => "rolled_back",
     }
 }

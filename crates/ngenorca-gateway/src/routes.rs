@@ -3,8 +3,7 @@
 use axum::{
     Extension, Router,
     extract::{
-        Query,
-        State,
+        Query, State,
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
     },
     response::{IntoResponse, Json},
@@ -12,8 +11,8 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use ngenorca_config::NgenOrcaConfig;
-use ngenorca_core::identity::{AttestationType, UserRole};
 use ngenorca_core::event::EventPayload;
+use ngenorca_core::identity::{AttestationType, UserRole};
 use ngenorca_core::orchestration::{QualityMethod, QualityVerdict, TaskIntent};
 use ngenorca_core::types::{ChannelId, ChannelKind, DeviceId, SessionId, UserId};
 use ngenorca_identity::resolver::IdentityAction;
@@ -59,10 +58,22 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(classify_preview),
         )
         .route("/api/v1/identity/users", get(list_users))
-        .route("/api/v1/identity/pairing/start", post(start_identity_pairing))
-        .route("/api/v1/identity/pairing/complete", post(complete_identity_pairing))
-        .route("/api/v1/identity/challenge/start", post(start_identity_challenge))
-        .route("/api/v1/identity/challenge/verify", post(verify_identity_challenge))
+        .route(
+            "/api/v1/identity/pairing/start",
+            post(start_identity_pairing),
+        )
+        .route(
+            "/api/v1/identity/pairing/complete",
+            post(complete_identity_pairing),
+        )
+        .route(
+            "/api/v1/identity/challenge/start",
+            post(start_identity_challenge),
+        )
+        .route(
+            "/api/v1/identity/challenge/verify",
+            post(verify_identity_challenge),
+        )
         .route("/api/v1/memory/stats", get(memory_stats))
         .route(
             "/api/v1/memory/user/{user_id}",
@@ -234,7 +245,11 @@ fn sandbox_policy_from_config(config: &NgenOrcaConfig) -> ngenorca_sandbox::Sand
         allow_read_paths,
         allow_write_paths,
         allow_spawn: config.sandbox.policy.allow_child_processes,
-        memory_limit_bytes: config.sandbox.policy.memory_limit_mb.saturating_mul(1024 * 1024),
+        memory_limit_bytes: config
+            .sandbox
+            .policy
+            .memory_limit_mb
+            .saturating_mul(1024 * 1024),
         cpu_time_limit_secs: config.sandbox.policy.cpu_limit_seconds,
         wall_timeout_secs: config.sandbox.policy.wall_time_limit_seconds,
     }
@@ -471,7 +486,12 @@ async fn complete_identity_pairing(
         Ok(None) => UserRole::Owner,
         Err(error) => return Json(json!({ "error": error })),
     };
-    let attestation = match body.attestation.as_deref().map(parse_attestation_type).transpose() {
+    let attestation = match body
+        .attestation
+        .as_deref()
+        .map(parse_attestation_type)
+        .transpose()
+    {
         Ok(value) => value,
         Err(error) => return Json(json!({ "error": error })),
     };
@@ -570,11 +590,8 @@ async fn verify_identity_challenge(
         Err(error) => return Json(json!({ "error": error.to_string() })),
     };
 
-    let linked_handles = runtime_identity::link_authenticated_web_handles(
-        state.identity(),
-        &user_id,
-        &caller,
-    );
+    let linked_handles =
+        runtime_identity::link_authenticated_web_handles(state.identity(), &user_id, &caller);
 
     let rebound_session_id = body
         .session_id
@@ -833,7 +850,10 @@ fn recent_operator_history(state: &AppState, limit: usize) -> OperatorHistorySum
     operator_history_from_events(&events, limit)
 }
 
-fn operator_history_from_events(events: &[ngenorca_core::event::Event], window_size: usize) -> OperatorHistorySummary {
+fn operator_history_from_events(
+    events: &[ngenorca_core::event::Event],
+    window_size: usize,
+) -> OperatorHistorySummary {
     let mut acc = HistoryAccumulator::default();
 
     for event in events {
@@ -843,7 +863,8 @@ fn operator_history_from_events(events: &[ngenorca_core::event::Event], window_s
                 acc.total_latency_ms += record.latency_ms;
                 acc.total_tokens += record.total_tokens;
                 acc.learned_reuse += usize::from(record.routing.from_memory);
-                acc.auto_accepts += usize::from(matches!(record.quality_method, QualityMethod::AutoAccept));
+                acc.auto_accepts +=
+                    usize::from(matches!(record.quality_method, QualityMethod::AutoAccept));
                 acc.correction_attempts += usize::from(record.correction.verification_attempted);
                 acc.grounded_responses += usize::from(record.correction.grounded);
                 acc.remediation_successes += usize::from(record.correction.remediation_succeeded);
@@ -932,7 +953,9 @@ async fn event_history(
         .unwrap_or(DEFAULT_EVENT_HISTORY_LIMIT)
         .clamp(1, MAX_EVENT_HISTORY_LIMIT);
     let overfetch_limit = if operator_query_needs_payload_filter(&query) {
-        requested_limit.saturating_mul(4).min(MAX_EVENT_HISTORY_LIMIT)
+        requested_limit
+            .saturating_mul(4)
+            .min(MAX_EVENT_HISTORY_LIMIT)
     } else {
         requested_limit
     };
@@ -1000,8 +1023,14 @@ async fn correction_timeline(
     State(state): State<AppState>,
     Query(query): Query<CorrectionTimelineQuery>,
 ) -> impl IntoResponse {
-    let bucket_hours = query.bucket_hours.unwrap_or(DEFAULT_TIMELINE_BUCKET_HOURS).clamp(1, 24 * 14);
-    let since_hours = query.since_hours.unwrap_or(DEFAULT_TIMELINE_WINDOW_HOURS).clamp(1, 24 * 365);
+    let bucket_hours = query
+        .bucket_hours
+        .unwrap_or(DEFAULT_TIMELINE_BUCKET_HOURS)
+        .clamp(1, 24 * 14);
+    let since_hours = query
+        .since_hours
+        .unwrap_or(DEFAULT_TIMELINE_WINDOW_HOURS)
+        .clamp(1, 24 * 365);
     let max_events = MAX_EVENT_HISTORY_LIMIT;
 
     let base_query = match build_timeline_event_query(&query, since_hours, max_events) {
@@ -1023,7 +1052,7 @@ async fn correction_timeline(
         .filter(|event| matches_timeline_filters(event, &query))
         .collect::<Vec<_>>();
 
-    let buckets = build_correction_timeline(&events, bucket_hours as i64);
+    let buckets = build_correction_timeline(&events, bucket_hours);
 
     Json(json!({
         "filters": {
@@ -1092,10 +1121,10 @@ fn matches_history_filters(
     query: &EventHistoryQuery,
     parsed_intent: Option<&TaskIntent>,
 ) -> bool {
-    if let Some(kind) = query.kind.as_ref() {
-        if !event_payload_kind(&event.payload).eq_ignore_ascii_case(kind) {
-            return false;
-        }
+    if let Some(kind) = query.kind.as_ref()
+        && !event_payload_kind(&event.payload).eq_ignore_ascii_case(kind)
+    {
+        return false;
     }
 
     if let Some(channel) = query.channel.as_ref() {
@@ -1110,8 +1139,9 @@ fn matches_history_filters(
 
     if let Some(tool_name) = query.tool_name.as_ref() {
         match &event.payload {
-            EventPayload::ToolExecution { tool_name: actual, .. }
-                if actual.eq_ignore_ascii_case(tool_name) => {}
+            EventPayload::ToolExecution {
+                tool_name: actual, ..
+            } if actual.eq_ignore_ascii_case(tool_name) => {}
             EventPayload::ToolExecution { .. } => return false,
             _ => return false,
         }
@@ -1120,7 +1150,11 @@ fn matches_history_filters(
     if let Some(target_agent) = query.target_agent.as_ref() {
         match &event.payload {
             EventPayload::OrchestrationCompleted(record)
-                if record.routing.target.name.eq_ignore_ascii_case(target_agent) => {}
+                if record
+                    .routing
+                    .target
+                    .name
+                    .eq_ignore_ascii_case(target_agent) => {}
             EventPayload::OrchestrationCompleted(_) => return false,
             _ => return false,
         }
@@ -1182,10 +1216,12 @@ fn operator_event_channel(event: &ngenorca_core::event::Event) -> Option<String>
         EventPayload::OrchestrationCompleted(record) => record.channel.clone(),
         EventPayload::ToolExecution { channel, .. } => channel.clone(),
         EventPayload::Message(message) => Some(channel_kind_label(&message.channel_kind)),
-        EventPayload::SystemLifecycle(ngenorca_core::event::LifecycleEvent::AdapterConnected { channel })
-        | EventPayload::SystemLifecycle(ngenorca_core::event::LifecycleEvent::AdapterDisconnected { channel, .. }) => {
-            Some(channel.clone())
-        }
+        EventPayload::SystemLifecycle(ngenorca_core::event::LifecycleEvent::AdapterConnected {
+            channel,
+        })
+        | EventPayload::SystemLifecycle(
+            ngenorca_core::event::LifecycleEvent::AdapterDisconnected { channel, .. },
+        ) => Some(channel.clone()),
         _ => None,
     }
 }
@@ -1252,7 +1288,8 @@ fn build_correction_timeline(
                 acc.escalations += usize::from(record.escalated);
                 acc.correction_attempts += usize::from(record.correction.verification_attempted);
                 acc.remediation_successes += usize::from(record.correction.remediation_succeeded);
-                acc.drift_corrections += usize::from(record.correction.post_synthesis_drift_corrected);
+                acc.drift_corrections +=
+                    usize::from(record.correction.post_synthesis_drift_corrected);
                 acc.grounded_responses += usize::from(record.correction.grounded);
             }
             EventPayload::ToolExecution { success, .. } => {
@@ -1298,7 +1335,12 @@ fn buckets_from_map(map: BTreeMap<String, usize>) -> Vec<HistoryBucket> {
         .into_iter()
         .map(|(label, count)| HistoryBucket { label, count })
         .collect::<Vec<_>>();
-    buckets.sort_by(|left, right| right.count.cmp(&left.count).then_with(|| left.label.cmp(&right.label)));
+    buckets.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.label.cmp(&right.label))
+    });
     buckets
 }
 
@@ -1328,15 +1370,18 @@ async fn orchestration_info(State(state): State<AppState>) -> Json<serde_json::V
     let history = state
         .learned_router()
         .history_summary_with_policy(policy, true)
-        .unwrap_or_else(|_| serde_json::from_value(json!({
-            "total_rules": 0,
-            "eligible_rules": 0,
-            "penalized_rules": 0,
-            "stale_rules": 0,
-            "intents": [],
-            "agents": [],
-            "domains": []
-        })).unwrap());
+        .unwrap_or_else(|_| {
+            serde_json::from_value(json!({
+                "total_rules": 0,
+                "eligible_rules": 0,
+                "penalized_rules": 0,
+                "stale_rules": 0,
+                "intents": [],
+                "agents": [],
+                "domains": []
+            }))
+            .unwrap()
+        });
 
     if let Some(object) = payload.as_object_mut() {
         object.insert(
@@ -1440,11 +1485,14 @@ async fn list_learned_routes(
         .filter(|diagnostic| {
             parsed_intent
                 .as_ref()
-                .map_or(true, |intent| diagnostic.rule.intent == *intent)
+                .is_none_or(|intent| diagnostic.rule.intent == *intent)
         })
         .filter(|diagnostic| {
-            query.target_agent.as_ref().map_or(true, |target_agent| {
-                diagnostic.rule.target_agent.eq_ignore_ascii_case(target_agent)
+            query.target_agent.as_ref().is_none_or(|target_agent| {
+                diagnostic
+                    .rule
+                    .target_agent
+                    .eq_ignore_ascii_case(target_agent)
             })
         })
         .filter(|diagnostic| !query.stale_only.unwrap_or(false) || diagnostic.stale)
@@ -1452,15 +1500,18 @@ async fn list_learned_routes(
     let history = state
         .learned_router()
         .history_summary_with_policy(policy, include_penalized)
-        .unwrap_or_else(|_| serde_json::from_value(json!({
-            "total_rules": 0,
-            "eligible_rules": 0,
-            "penalized_rules": 0,
-            "stale_rules": 0,
-            "intents": [],
-            "agents": [],
-            "domains": []
-        })).unwrap());
+        .unwrap_or_else(|_| {
+            serde_json::from_value(json!({
+                "total_rules": 0,
+                "eligible_rules": 0,
+                "penalized_rules": 0,
+                "stale_rules": 0,
+                "intents": [],
+                "agents": [],
+                "domains": []
+            }))
+            .unwrap()
+        });
 
     Json(json!({
         "count": diagnostics.len(),
@@ -1494,10 +1545,10 @@ async fn clear_learned_routes(
         None => None,
     };
 
-    match state.learned_router().delete_rules(
-        parsed_intent.as_ref(),
-        query.target_agent.as_deref(),
-    ) {
+    match state
+        .learned_router()
+        .delete_rules(parsed_intent.as_ref(), query.target_agent.as_deref())
+    {
         Ok(deleted) => (
             axum::http::StatusCode::OK,
             Json(json!({
@@ -1519,7 +1570,6 @@ fn parse_task_intent(intent: &str) -> Result<TaskIntent, String> {
     serde_json::from_str::<TaskIntent>(&format!("\"{intent}\""))
         .map_err(|_| format!("invalid intent '{intent}'"))
 }
-
 
 // ─── Chat Request/Response types ────────────────────────────────
 
@@ -1585,8 +1635,12 @@ fn parse_attestation_type(value: &str) -> Result<AttestationType, String> {
         "tpm" => Ok(AttestationType::Tpm),
         "secureenclave" | "secure_enclave" | "secure-enclave" => Ok(AttestationType::SecureEnclave),
         "strongbox" | "strong_box" | "strong-box" => Ok(AttestationType::StrongBox),
-        "clientcertificate" | "client_certificate" | "client-certificate" => Ok(AttestationType::ClientCertificate),
-        "compositefingerprint" | "composite_fingerprint" | "composite-fingerprint" => Ok(AttestationType::CompositeFingerprint),
+        "clientcertificate" | "client_certificate" | "client-certificate" => {
+            Ok(AttestationType::ClientCertificate)
+        }
+        "compositefingerprint" | "composite_fingerprint" | "composite-fingerprint" => {
+            Ok(AttestationType::CompositeFingerprint)
+        }
         other => Err(format!("invalid attestation '{other}'")),
     }
 }
@@ -1659,11 +1713,17 @@ async fn chat(
         body.device_signature.as_deref(),
         &body.message,
     );
-    let resolved_identity =
-        runtime_identity::resolve_web_identity_with_device(state.identity(), &caller, device_claim.as_ref());
+    let resolved_identity = runtime_identity::resolve_web_identity_with_device(
+        state.identity(),
+        &caller,
+        device_claim.as_ref(),
+    );
     let identity =
         runtime_identity::describe_web_identity(&caller, &resolved_identity, device_claim.as_ref());
-    if matches!(resolved_identity.action, IdentityAction::Challenge | IdentityAction::Block) {
+    if matches!(
+        resolved_identity.action,
+        IdentityAction::Challenge | IdentityAction::Block
+    ) {
         return Json(json!({
             "error": "device verification failed for this request",
             "identity": identity,
@@ -1729,10 +1789,13 @@ async fn chat(
     let memory_ctx = if state.config().memory.enabled {
         if let Some(ref uid) = user_id {
             let token_budget = state.config().memory.semantic_token_budget;
-            match state
-                .memory()
-                .build_context_for_task(uid, &session_id, &body.message, &classification, token_budget)
-            {
+            match state.memory().build_context_for_task(
+                uid,
+                &session_id,
+                &body.message,
+                &classification,
+                token_budget,
+            ) {
                 Ok(ctx) => {
                     for wm in &ctx.working_messages {
                         conversation.push(ChatMessage {
@@ -1860,7 +1923,7 @@ async fn chat(
                 latency_ms: response.latency_ms,
                 escalated: response.escalated,
                 orchestration: response.diagnostics,
-                    identity: identity,
+                identity,
             }))
         }
         Err(e) => {
@@ -1966,8 +2029,7 @@ async fn handle_whatsapp_webhook(
     }
 
     // Signature valid (or no secret configured) — parse payload and publish to EventBus.
-    let messages =
-        crate::channels::whatsapp::WhatsAppAdapter::parse_webhook_messages(body);
+    let messages = crate::channels::whatsapp::WhatsAppAdapter::parse_webhook_messages(body);
     for ngen_msg in messages {
         let event = ngenorca_core::event::Event {
             id: ngenorca_core::types::EventId::new(),
@@ -2101,8 +2163,7 @@ async fn handle_telegram_webhook(
     }
 
     // Parse update and publish message to EventBus.
-    let messages =
-        crate::channels::telegram::TelegramAdapter::parse_webhook_messages(body);
+    let messages = crate::channels::telegram::TelegramAdapter::parse_webhook_messages(body);
     for ngen_msg in messages {
         let event = ngenorca_core::event::Event {
             id: ngenorca_core::types::EventId::new(),
@@ -2156,8 +2217,7 @@ async fn handle_teams_webhook(
     }
 
     // Parse activity and publish message to EventBus.
-    let messages =
-        crate::channels::teams::TeamsAdapter::parse_webhook_messages(body);
+    let messages = crate::channels::teams::TeamsAdapter::parse_webhook_messages(body);
     for ngen_msg in messages {
         let event = ngenorca_core::event::Event {
             id: ngenorca_core::types::EventId::new(),
@@ -2248,7 +2308,8 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
     let mut event_rx = state.event_bus().subscribe();
 
     let resolved_identity = runtime_identity::resolve_web_identity(state.identity(), &caller);
-    let connection_identity = runtime_identity::describe_web_identity(&caller, &resolved_identity, None);
+    let connection_identity =
+        runtime_identity::describe_web_identity(&caller, &resolved_identity, None);
     let user_id = resolved_identity.user_id;
 
     let display_user = caller.username.as_deref().unwrap_or("anonymous");
@@ -2325,10 +2386,9 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
                 if let Err(done) = handle_client_message(
                     &msg, &state, &mut sender, &caller, display_user,
                 ).await
+                    && done
                 {
-                    if done {
-                        break;
-                    }
+                    break;
                 }
             }
 
@@ -2361,10 +2421,10 @@ async fn handle_websocket(socket: WebSocket, state: AppState, caller: CallerIden
                             payload: serde_json::to_value(&bus_event.payload).ok(),
                             timestamp: bus_event.timestamp.to_rfc3339(),
                         };
-                        if let Ok(json) = serde_json::to_string(&ws_event) {
-                            if sender.send(WsMessage::Text(json.into())).await.is_err() {
-                                break; // Client disconnected
-                            }
+                        if let Ok(json) = serde_json::to_string(&ws_event)
+                            && sender.send(WsMessage::Text(json.into())).await.is_err()
+                        {
+                            break; // Client disconnected
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -2424,10 +2484,17 @@ async fn handle_client_message(
         ws_msg.device_signature.as_deref(),
         &ws_msg.message,
     );
-    let resolved_identity =
-        runtime_identity::resolve_web_identity_with_device(state.identity(), caller, device_claim.as_ref());
-    let identity = runtime_identity::describe_web_identity(caller, &resolved_identity, device_claim.as_ref());
-    if matches!(resolved_identity.action, IdentityAction::Challenge | IdentityAction::Block) {
+    let resolved_identity = runtime_identity::resolve_web_identity_with_device(
+        state.identity(),
+        caller,
+        device_claim.as_ref(),
+    );
+    let identity =
+        runtime_identity::describe_web_identity(caller, &resolved_identity, device_claim.as_ref());
+    if matches!(
+        resolved_identity.action,
+        IdentityAction::Challenge | IdentityAction::Block
+    ) {
         let err_resp = WsChatResponse {
             msg_type: "error".into(),
             content: None,
@@ -2577,7 +2644,10 @@ async fn handle_client_message(
     }
 
     let orch = HybridOrchestrator::new(Arc::new(state.config().clone()));
-    let classification = match orch.classify(&ws_msg.message, Some(state.providers())).await {
+    let classification = match orch
+        .classify(&ws_msg.message, Some(state.providers()))
+        .await
+    {
         Ok(classification) => classification,
         Err(e) => {
             let err_resp = WsChatResponse {
@@ -2602,10 +2672,13 @@ async fn handle_client_message(
     let memory_ctx = if state.config().memory.enabled {
         if let Some(uid) = user_id {
             let token_budget = state.config().memory.semantic_token_budget;
-            match state
-                .memory()
-                .build_context_for_task(uid, &session_id, &ws_msg.message, &classification, token_budget)
-            {
+            match state.memory().build_context_for_task(
+                uid,
+                &session_id,
+                &ws_msg.message,
+                &classification,
+                token_budget,
+            ) {
                 Ok(ctx) => Some(ctx),
                 Err(e) => {
                     warn!(error = %e, "Failed to build WebSocket memory context");

@@ -887,7 +887,10 @@ mod tests {
                 conflicting_branches: 1,
                 contradiction_anchor_stage: Some("execute-domain-work".into()),
                 reconciliation_strategy: Some("weighted_branch_evidence".into()),
-                conflict_summary: vec!["cross-check branch flagged a dependency risk against the execution draft".into()],
+                conflict_summary: vec![
+                    "cross-check branch flagged a dependency risk against the execution draft"
+                        .into(),
+                ],
                 contradiction_signals: vec![
                     "negated_action_overlap: dependency, update".into(),
                     "conflict_markers_present".into(),
@@ -947,7 +950,9 @@ mod tests {
                 tool: Some("run_command".into()),
                 arguments: Some(serde_json::json!({"command": "cargo", "args": ["test"]})),
                 verification: Some("Confirm exit_code is 0 before summarizing success.".into()),
-                rollback: Some("No rollback is required for this read-only validation step.".into()),
+                rollback: Some(
+                    "No rollback is required for this read-only validation step.".into(),
+                ),
                 checkpoints: vec!["capture failing test output before edits".into()],
                 platform_hints: vec!["windows".into(), "linux".into()],
                 requires_confirmation: false,
@@ -961,8 +966,14 @@ mod tests {
         assert_eq!(back.name, "rust-build-fix");
         assert_eq!(back.steps.len(), 1);
         assert_eq!(back.steps[0].step_id.as_deref(), Some("run-tests"));
-        assert_eq!(back.steps[0].rollback.as_deref(), Some("No rollback is required for this read-only validation step."));
-        assert_eq!(back.steps[0].checkpoints, vec!["capture failing test output before edits"]);
+        assert_eq!(
+            back.steps[0].rollback.as_deref(),
+            Some("No rollback is required for this read-only validation step.")
+        );
+        assert_eq!(
+            back.steps[0].checkpoints,
+            vec!["capture failing test output before edits"]
+        );
         assert_eq!(back.preferred_tools[0], "read_file");
     }
 

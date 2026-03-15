@@ -379,7 +379,8 @@ fn build_sandbox_audit(
         .collect::<Vec<_>>();
     let mut policy_gaps = Vec::new();
 
-    let filesystem_requested = !policy.allow_read_paths.is_empty() || !policy.allow_write_paths.is_empty();
+    let filesystem_requested =
+        !policy.allow_read_paths.is_empty() || !policy.allow_write_paths.is_empty();
     if filesystem_requested && !enforced_controls.contains(&"filesystem_policy") {
         policy_gaps.push("filesystem scope is not fully enforced by the active backend".into());
     }
@@ -390,9 +391,11 @@ fn build_sandbox_audit(
         policy_gaps.push("child-process restriction is not enforced by the active backend".into());
     }
     if (policy.memory_limit_bytes > 0 || policy.cpu_time_limit_secs > 0)
-        && !(enforced_controls.contains(&"memory_limit") && enforced_controls.contains(&"cpu_limit"))
+        && !(enforced_controls.contains(&"memory_limit")
+            && enforced_controls.contains(&"cpu_limit"))
     {
-        policy_gaps.push("CPU and/or memory limits are not fully enforced by the active backend".into());
+        policy_gaps
+            .push("CPU and/or memory limits are not fully enforced by the active backend".into());
     }
 
     SandboxAudit {
@@ -618,7 +621,13 @@ async fn exec_windows_job(
                 "windows_job",
                 policy,
                 true,
-                &["job_object", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                &[
+                    "job_object",
+                    "wall_timeout",
+                    "process_limit",
+                    "memory_limit",
+                    "cpu_limit",
+                ],
                 None,
             ),
         )),
@@ -640,7 +649,13 @@ async fn exec_windows_job(
                     "windows_job",
                     policy,
                     true,
-                    &["job_object", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                    &[
+                        "job_object",
+                        "wall_timeout",
+                        "process_limit",
+                        "memory_limit",
+                        "cpu_limit",
+                    ],
                     None,
                 ),
             ))
@@ -858,7 +873,13 @@ async fn exec_linux_prlimit(
                 "linux_prlimit",
                 policy,
                 false,
-                &["prlimit", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                &[
+                    "prlimit",
+                    "wall_timeout",
+                    "process_limit",
+                    "memory_limit",
+                    "cpu_limit",
+                ],
                 Some("namespace isolation unavailable; using prlimit-only enforcement".into()),
             ),
         )),
@@ -873,7 +894,13 @@ async fn exec_linux_prlimit(
                 "linux_prlimit",
                 policy,
                 false,
-                &["prlimit", "wall_timeout", "process_limit", "memory_limit", "cpu_limit"],
+                &[
+                    "prlimit",
+                    "wall_timeout",
+                    "process_limit",
+                    "memory_limit",
+                    "cpu_limit",
+                ],
                 Some("namespace isolation unavailable; using prlimit-only enforcement".into()),
             ),
         )),
@@ -1003,7 +1030,12 @@ async fn exec_macos_sandboxed(
                 "macos_sandbox_exec",
                 policy,
                 true,
-                &["seatbelt_profile", "wall_timeout", "filesystem_policy", "network_policy"],
+                &[
+                    "seatbelt_profile",
+                    "wall_timeout",
+                    "filesystem_policy",
+                    "network_policy",
+                ],
                 None,
             ),
         )),
@@ -1038,7 +1070,12 @@ async fn exec_macos_sandboxed(
                 "macos_sandbox_exec",
                 policy,
                 true,
-                &["seatbelt_profile", "wall_timeout", "filesystem_policy", "network_policy"],
+                &[
+                    "seatbelt_profile",
+                    "wall_timeout",
+                    "filesystem_policy",
+                    "network_policy",
+                ],
                 None,
             ),
         )),
@@ -1157,7 +1194,12 @@ mod tests {
     fn audit_policy_reports_backend_gaps() {
         let audit = audit_policy(&SandboxPolicy::default(), true);
         assert!(!audit.backend.is_empty());
-        assert!(audit.enforced_controls.iter().any(|value| value == "wall_timeout"));
+        assert!(
+            audit
+                .enforced_controls
+                .iter()
+                .any(|value| value == "wall_timeout")
+        );
     }
 
     #[test]
@@ -1221,7 +1263,17 @@ mod tests {
         #[cfg(windows)]
         let result = sandboxed_exec_with_cwd(
             "cmd",
-            &["/C", "if", "exist", "marker.txt", "(echo", "marker-found)", "else", "(echo", "missing)"] ,
+            &[
+                "/C",
+                "if",
+                "exist",
+                "marker.txt",
+                "(echo",
+                "marker-found)",
+                "else",
+                "(echo",
+                "missing)",
+            ],
             Some(&cwd),
             &policy,
         )
@@ -1229,7 +1281,10 @@ mod tests {
         #[cfg(not(windows))]
         let result = sandboxed_exec_with_cwd(
             "sh",
-            &["-c", "test -f marker.txt && echo marker-found || echo missing"],
+            &[
+                "-c",
+                "test -f marker.txt && echo marker-found || echo missing",
+            ],
             Some(&cwd),
             &policy,
         )

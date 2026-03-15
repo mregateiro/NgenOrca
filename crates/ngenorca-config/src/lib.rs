@@ -1969,7 +1969,11 @@ mod tests {
         )
         .unwrap();
 
-        let kilo = cfg.agent.providers.kilo.expect("kilo config should deserialize");
+        let kilo = cfg
+            .agent
+            .providers
+            .kilo
+            .expect("kilo config should deserialize");
         assert_eq!(kilo.api_key.as_deref(), Some("kgw_test"));
         assert_eq!(kilo.base_url, "https://api.kilo.ai/api/gateway");
     }
@@ -2176,9 +2180,11 @@ mod tests {
         cfg.agent.learned_routing.max_rule_age_days = 10;
 
         let warnings = cfg.validate().unwrap();
-        assert!(warnings.iter().any(|warning| {
-            warning.contains("decay_after_days exceeds")
-        }));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("decay_after_days exceeds") })
+        );
     }
 
     #[test]
@@ -2256,9 +2262,11 @@ mod tests {
         let mut cfg = NgenOrcaConfig::default();
         cfg.sandbox.enabled = false;
         let warnings = cfg.validate().unwrap();
-        assert!(warnings.iter().any(|warning| {
-            warning.contains("sandbox.enabled is false")
-        }));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("sandbox.enabled is false") })
+        );
     }
 
     // ── Validation tests ──

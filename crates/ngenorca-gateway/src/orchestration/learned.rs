@@ -13,8 +13,8 @@ use ngenorca_config::LearnedRoutingConfig;
 use ngenorca_core::Error;
 use ngenorca_core::Result;
 use ngenorca_core::orchestration::{
-    LearnedRoutingRule, OrchestrationRecord, QualityVerdict, TaskClassification,
-    TaskComplexity, TaskIntent,
+    LearnedRoutingRule, OrchestrationRecord, QualityVerdict, TaskClassification, TaskComplexity,
+    TaskIntent,
 };
 use rusqlite::{Connection, params};
 use std::collections::BTreeMap;
@@ -153,11 +153,7 @@ impl LearnedRouter {
         intent: &TaskIntent,
         domain_tags: &[String],
     ) -> Result<Option<LearnedRouteDiagnostics>> {
-        self.lookup_diagnostic_with_policy(
-            intent,
-            domain_tags,
-            &LearnedRoutingConfig::default(),
-        )
+        self.lookup_diagnostic_with_policy(intent, domain_tags, &LearnedRoutingConfig::default())
     }
 
     pub fn lookup_diagnostic_with_policy(
@@ -231,7 +227,8 @@ impl LearnedRouter {
         let rules = Self::load_rules_for_intent(&conn, &classification.intent)?;
 
         let select = |prefer_domain_match: bool| {
-            rules.iter()
+            rules
+                .iter()
                 .filter(|rule| {
                     complexity_supported(rule.rule.max_complexity, classification.complexity)
                         && (!prefer_domain_match
@@ -250,7 +247,8 @@ impl LearnedRouter {
         };
 
         Ok(select(true).or_else(|| {
-            rules.iter()
+            rules
+                .iter()
                 .filter(|rule| {
                     rule.rule.domain_filter.is_none()
                         && complexity_supported(rule.rule.max_complexity, classification.complexity)
@@ -326,7 +324,9 @@ impl LearnedRouter {
             )
             .ok();
 
-        if let Some((id, old_conf, old_count, old_accepts, old_escalations, old_failures)) = existing {
+        if let Some((id, old_conf, old_count, old_accepts, old_escalations, old_failures)) =
+            existing
+        {
             // Update existing rule with exponential moving average
             let new_count = old_count + 1;
             let alpha = 0.12_f64; // Learning rate
@@ -398,7 +398,8 @@ impl LearnedRouter {
                     last_outcome,
                     record.timestamp.to_rfc3339(),
                 ],
-            ).map_err(|e| Error::Database(e.to_string()))?;
+            )
+            .map_err(|e| Error::Database(e.to_string()))?;
 
             debug!(
                 intent = %intent_str,
@@ -471,7 +472,10 @@ impl LearnedRouter {
             .iter()
             .filter(|diagnostic| Self::rule_is_eligible(diagnostic, policy))
             .count();
-        let stale_rules = diagnostics.iter().filter(|diagnostic| diagnostic.stale).count();
+        let stale_rules = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.stale)
+            .count();
         let penalized_rules = diagnostics
             .iter()
             .filter(|diagnostic| !Self::rule_is_eligible(diagnostic, policy))
@@ -574,10 +578,7 @@ impl LearnedRouter {
         Ok(count as u64)
     }
 
-    fn load_rules_for_intent(
-        conn: &Connection,
-        intent: &TaskIntent,
-    ) -> Result<Vec<StoredRule>> {
+    fn load_rules_for_intent(conn: &Connection, intent: &TaskIntent) -> Result<Vec<StoredRule>> {
         let intent_str = Self::intent_key(intent);
         let mut stmt = conn
             .prepare(
@@ -639,11 +640,8 @@ impl LearnedRouter {
         policy: &LearnedRoutingConfig,
     ) -> LearnedRouteDiagnostics {
         let age_days = age_days(rule.rule.last_updated);
-        let (accept_rate, escalation_rate, failure_rate) = routing_rates(
-            rule.accept_count,
-            rule.escalation_count,
-            rule.failure_count,
-        );
+        let (accept_rate, escalation_rate, failure_rate) =
+            routing_rates(rule.accept_count, rule.escalation_count, rule.failure_count);
         let stability_score = stability_score(accept_rate, escalation_rate, failure_rate);
         let adaptive_decay_multiplier = adaptive_decay_multiplier(
             age_days,
@@ -719,16 +717,13 @@ fn effective_confidence(
     let (accept_rate, escalation_rate, failure_rate) =
         routing_rates(accept_count, escalation_count, failure_count);
     let stability = stability_score(accept_rate, escalation_rate, failure_rate);
-    (
-        confidence
-            + ((accept_rate - 0.5).max(0.0) * 0.08)
-            - (0.16 * escalation_rate)
-            - (0.26 * failure_rate)
-            + ((stability - 0.5).max(0.0) * 0.05)
-            - staleness_penalty
-            + outcome_trend_adjustment
-    )
-    .clamp(0.0, 1.0)
+    (confidence + ((accept_rate - 0.5).max(0.0) * 0.08)
+        - (0.16 * escalation_rate)
+        - (0.26 * failure_rate)
+        + ((stability - 0.5).max(0.0) * 0.05)
+        - staleness_penalty
+        + outcome_trend_adjustment)
+        .clamp(0.0, 1.0)
 }
 
 fn routing_rates(accept_count: u32, escalation_count: u32, failure_count: u32) -> (f64, f64, f64) {
@@ -1395,10 +1390,8 @@ mod tests {
             4,
             0,
             1,
-            staleness_penalty(
-                1,
-                &LearnedRoutingConfig::default(),
-            ) * adaptive_decay_multiplier(1, 4, 0, 1, "failed", &LearnedRoutingConfig::default()),
+            staleness_penalty(1, &LearnedRoutingConfig::default())
+                * adaptive_decay_multiplier(1, 4, 0, 1, "failed", &LearnedRoutingConfig::default()),
             outcome_trend_adjustment(1, 4, 0, 1, "failed", &LearnedRoutingConfig::default()),
         );
         let older = effective_confidence(
@@ -1406,10 +1399,15 @@ mod tests {
             4,
             0,
             1,
-            staleness_penalty(
-                10,
-                &LearnedRoutingConfig::default(),
-            ) * adaptive_decay_multiplier(10, 4, 0, 1, "failed", &LearnedRoutingConfig::default()),
+            staleness_penalty(10, &LearnedRoutingConfig::default())
+                * adaptive_decay_multiplier(
+                    10,
+                    4,
+                    0,
+                    1,
+                    "failed",
+                    &LearnedRoutingConfig::default(),
+                ),
             outcome_trend_adjustment(10, 4, 0, 1, "failed", &LearnedRoutingConfig::default()),
         );
 
@@ -1506,6 +1504,11 @@ mod tests {
         }));
         assert!(summary.domains.iter().any(|bucket| bucket.label == "rust"));
         assert!(summary.domains.iter().any(|bucket| bucket.label == "docs"));
-        assert!(summary.domains.iter().any(|bucket| bucket.label == "(none)"));
+        assert!(
+            summary
+                .domains
+                .iter()
+                .any(|bucket| bucket.label == "(none)")
+        );
     }
 }

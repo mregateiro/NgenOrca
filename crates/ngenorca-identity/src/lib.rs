@@ -14,8 +14,11 @@ pub mod store;
 
 use ngenorca_core::Result;
 use ngenorca_core::identity::{UserIdentity, UserRole};
-use ngenorca_core::{Error, identity::{AttestationType, DeviceBinding}};
 use ngenorca_core::types::{ChannelId, ChannelKind, DeviceId, TrustLevel, UserId};
+use ngenorca_core::{
+    Error,
+    identity::{AttestationType, DeviceBinding},
+};
 use resolver::channel_handle_candidates;
 use serde::{Deserialize, Serialize};
 use store::IdentityStore;
@@ -172,14 +175,12 @@ impl IdentityManager {
         let candidates = channel_handle_candidates(&channel_kind, &handle);
 
         for candidate in &candidates {
-            if let Some(existing) = self.store.find_by_channel(&channel_kind, &candidate)?
+            if let Some(existing) = self.store.find_by_channel(&channel_kind, candidate)?
                 && existing.user_id != *user_id
             {
                 return Err(Error::Identity(format!(
                     "channel handle '{}' conflicts with existing {:?} binding for user {}",
-                    handle,
-                    channel_kind,
-                    existing.user_id.0
+                    handle, channel_kind, existing.user_id.0
                 )));
             }
         }
@@ -412,7 +413,11 @@ fn decode_base64(value: &str) -> Result<Vec<u8>> {
         .map_err(|e| Error::Identity(format!("invalid base64 payload: {e}")))
 }
 
-fn verify_device_signature(public_key_b64: &str, signature_bytes: &[u8], message: &[u8]) -> Result<bool> {
+fn verify_device_signature(
+    public_key_b64: &str,
+    signature_bytes: &[u8],
+    message: &[u8],
+) -> Result<bool> {
     use base64::Engine;
     use ring::signature::{ED25519, UnparsedPublicKey};
 
@@ -548,9 +553,7 @@ mod tests {
             )
             .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("conflicts with existing"));
+        assert!(error.to_string().contains("conflicts with existing"));
     }
 
     #[test]
@@ -695,8 +698,8 @@ mod tests {
         let nonce = base64::engine::general_purpose::STANDARD
             .decode(&challenge.nonce_b64)
             .unwrap();
-        let signature = base64::engine::general_purpose::STANDARD
-            .encode(key_pair.sign(&nonce).as_ref());
+        let signature =
+            base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
 
         let (resolved_user, trust) = mgr
             .verify_challenge_response(&challenge.request_id, &signature)

@@ -28,8 +28,8 @@ pub mod tools;
 use ngenorca_bus::EventBus;
 use ngenorca_config::NgenOrcaConfig;
 use ngenorca_core::Result;
-use ngenorca_identity::resolver::IdentityAction;
 use ngenorca_identity::IdentityManager;
+use ngenorca_identity::resolver::IdentityAction;
 use ngenorca_memory::MemoryManager;
 use plugins::PluginRegistry;
 use providers::ProviderRegistry;
@@ -78,12 +78,16 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
     let (plugin_tx, mut plugin_rx) = tokio::sync::mpsc::unbounded_channel();
     let plugin_dir = config.data_dir.join("plugins");
     std::fs::create_dir_all(&plugin_dir).ok();
-    let plugin_registry = PluginRegistry::new_with_sandbox(plugin_tx, plugin_dir, config.sandbox.enabled);
+    let plugin_registry =
+        PluginRegistry::new_with_sandbox(plugin_tx, plugin_dir, config.sandbox.enabled);
     info!("Plugin registry initialized");
 
     // Register built-in agent tools.
     tools::register_builtin_tools(&plugin_registry, &config).await;
-    info!(tool_count = plugin_registry.tool_count().await, "Built-in tools registered");
+    info!(
+        tool_count = plugin_registry.tool_count().await,
+        "Built-in tools registered"
+    );
 
     // Spawn a bridge task: events emitted by plugins are forwarded to the bus.
     {
@@ -167,8 +171,13 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                 // Extract text content (skip non-text messages for now).
                 let text = match &msg.content {
                     ngenorca_core::message::Content::Text(t) => t.clone(),
-                    ngenorca_core::message::Content::Image { caption: Some(c), .. } => c.clone(),
-                    ngenorca_core::message::Content::Audio { transcript: Some(t), .. } => t.clone(),
+                    ngenorca_core::message::Content::Image {
+                        caption: Some(c), ..
+                    } => c.clone(),
+                    ngenorca_core::message::Content::Audio {
+                        transcript: Some(t),
+                        ..
+                    } => t.clone(),
                     _ => {
                         tracing::debug!(channel = %msg.channel_kind, "Skipping non-text inbound message");
                         continue;
@@ -176,10 +185,14 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                 };
 
                 let channel_kind_str = msg.channel_kind.to_string();
-                let resolved_identity = runtime_identity::resolve_message_identity(state.identity(), &msg);
-                let identity_diagnostics = runtime_identity::describe_message_identity(&msg, &resolved_identity);
-                if matches!(resolved_identity.action, IdentityAction::Challenge | IdentityAction::Block)
-                {
+                let resolved_identity =
+                    runtime_identity::resolve_message_identity(state.identity(), &msg);
+                let identity_diagnostics =
+                    runtime_identity::describe_message_identity(&msg, &resolved_identity);
+                if matches!(
+                    resolved_identity.action,
+                    IdentityAction::Challenge | IdentityAction::Block
+                ) {
                     tracing::warn!(
                         channel = %channel_kind_str,
                         action = ?resolved_identity.action,
@@ -190,8 +203,10 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                     );
                     continue;
                 }
-                if matches!(resolved_identity.action, IdentityAction::RequirePairing | IdentityAction::ProceedReduced)
-                {
+                if matches!(
+                    resolved_identity.action,
+                    IdentityAction::RequirePairing | IdentityAction::ProceedReduced
+                ) {
                     tracing::info!(
                         channel = %channel_kind_str,
                         action = ?resolved_identity.action,
@@ -216,10 +231,11 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                     (msg.user_id.as_ref(), user_id.as_ref())
                 {
                     if alias_user != canonical_user {
-                        match state
-                            .sessions()
-                            .promote_alias_to_user(alias_user, &channel_kind_str, canonical_user)
-                        {
+                        match state.sessions().promote_alias_to_user(
+                            alias_user,
+                            &channel_kind_str,
+                            canonical_user,
+                        ) {
                             Ok(Some(session_id)) => session_id,
                             Ok(None) => match state
                                 .sessions()
@@ -246,7 +262,10 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                             }
                         }
                     } else {
-                        match state.sessions().get_or_create(user_id.as_ref(), &channel_kind_str) {
+                        match state
+                            .sessions()
+                            .get_or_create(user_id.as_ref(), &channel_kind_str)
+                        {
                             Ok(session_id) => session_id,
                             Err(e) => {
                                 tracing::error!(error = %e, "Failed to create session for inbound message");
@@ -255,7 +274,10 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                         }
                     }
                 } else {
-                    match state.sessions().get_or_create(user_id.as_ref(), &channel_kind_str) {
+                    match state
+                        .sessions()
+                        .get_or_create(user_id.as_ref(), &channel_kind_str)
+                    {
                         Ok(session_id) => session_id,
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to create session for inbound message");
@@ -264,9 +286,9 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                     }
                 };
 
-                let orch = orchestration::HybridOrchestrator::new(
-                    std::sync::Arc::new(state.config().clone()),
-                );
+                let orch = orchestration::HybridOrchestrator::new(std::sync::Arc::new(
+                    state.config().clone(),
+                ));
                 let classification = match orch.classify(&text, Some(state.providers())).await {
                     Ok(classification) => classification,
                     Err(e) => {
@@ -281,7 +303,13 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                         let budget = state.config().memory.semantic_token_budget;
                         state
                             .memory()
-                            .build_context_for_task(uid, &session_id, &text, &classification, budget)
+                            .build_context_for_task(
+                                uid,
+                                &session_id,
+                                &text,
+                                &classification,
+                                budget,
+                            )
                             .ok()
                     } else {
                         None
@@ -336,7 +364,9 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                 {
                     Ok((response, record)) => {
                         state.metrics().inc_orchestrations();
-                        state.metrics().add_tokens(response.total_usage.total_tokens as u64);
+                        state
+                            .metrics()
+                            .add_tokens(response.total_usage.total_tokens as u64);
                         if response.escalated {
                             state.metrics().inc_escalations();
                         }
@@ -358,20 +388,16 @@ pub async fn start(config: NgenOrcaConfig, config_file_path: std::path::PathBuf)
                         );
 
                         // Update session.
-                        let _ = state.sessions().record_message(
-                            &session_id,
-                            response.total_usage.total_tokens,
-                        );
+                        let _ = state
+                            .sessions()
+                            .record_message(&session_id, response.total_usage.total_tokens);
 
                         // Store in episodic memory.
                         if let Some(ref uid) = user_id {
                             let entry = ngenorca_memory::episodic::EpisodicEntry {
                                 id: 0,
                                 user_id: uid.0.clone(),
-                                content: format!(
-                                    "User: {}\nAssistant: {}",
-                                    text, response.content
-                                ),
+                                content: format!("User: {}\nAssistant: {}", text, response.content),
                                 summary: None,
                                 channel: channel_kind_str.clone(),
                                 timestamp: chrono::Utc::now(),

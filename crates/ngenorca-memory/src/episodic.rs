@@ -220,7 +220,8 @@ impl EpisodicMemory {
         let mut trimmed = Vec::new();
 
         for entry in scored.into_iter().take(limit) {
-            let entry_chars = entry.content.len() + entry.summary.as_ref().map(|s| s.len()).unwrap_or(0);
+            let entry_chars =
+                entry.content.len() + entry.summary.as_ref().map(|s| s.len()).unwrap_or(0);
             if !trimmed.is_empty() && total_chars + entry_chars > char_budget {
                 break;
             }

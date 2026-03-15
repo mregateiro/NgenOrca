@@ -211,7 +211,9 @@ impl SessionManager {
         };
 
         match session_id {
-            Some(session_id) => self.promote_to_user(&session_id, canonical_user_id).map(Some),
+            Some(session_id) => self
+                .promote_to_user(&session_id, canonical_user_id)
+                .map(Some),
             None => Ok(None),
         }
     }
@@ -481,7 +483,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(promoted, Some(alias_sid.clone()));
-        assert_eq!(mgr.get(&alias_sid).unwrap().user_id, Some(canonical.clone()));
-        assert_eq!(mgr.get_or_create(Some(&canonical), "telegram").unwrap(), alias_sid);
+        assert_eq!(
+            mgr.get(&alias_sid).unwrap().user_id,
+            Some(canonical.clone())
+        );
+        assert_eq!(
+            mgr.get_or_create(Some(&canonical), "telegram").unwrap(),
+            alias_sid
+        );
     }
 }

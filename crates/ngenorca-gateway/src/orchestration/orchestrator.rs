@@ -15,14 +15,13 @@ use ngenorca_config::{NgenOrcaConfig, RoutingStrategy, SubAgentConfig};
 use ngenorca_core::Result;
 use ngenorca_core::orchestration::{
     ClassificationMethod, CorrectionRecord, OrchestrationRecord, QualityMethod, QualityVerdict,
-    RoutingDecision, SubAgentId, SynthesisRecord, TaskClassification, TaskComplexity,
-    TaskIntent,
+    RoutingDecision, SubAgentId, SynthesisRecord, TaskClassification, TaskComplexity, TaskIntent,
 };
 use ngenorca_core::types::{SessionId, UserId};
 use ngenorca_plugin_sdk::{
     BranchEvidenceDiagnostics, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
     CorrectionAttemptTrace, CorrectionDiagnostics, DelegationPlanDiagnostics,
-    DelegationStepDiagnostics, OrchestrationDiagnostics, OrchestratedResponse,
+    DelegationStepDiagnostics, OrchestratedResponse, OrchestrationDiagnostics,
     SynthesisDiagnostics, ToolCallResponse, ToolDefinition, Usage, VerificationDiagnostics,
     WorkerExecutionTrace,
 };
@@ -426,6 +425,7 @@ impl HybridOrchestrator {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_with_classification(
         &self,
         message: &str,
@@ -475,8 +475,8 @@ impl HybridOrchestrator {
         let execution_step = delegation_plan
             .as_ref()
             .and_then(|plan| execution_plan_step(plan, &routing.target));
-        let execution_memory_view = execution_step
-            .and_then(|step| build_branch_memory_view(step, memory_context));
+        let execution_memory_view =
+            execution_step.and_then(|step| build_branch_memory_view(step, memory_context));
         let execution_memory_context = execution_memory_view
             .as_ref()
             .map_or(memory_context, |view| Some(&view.context));
@@ -485,7 +485,9 @@ impl HybridOrchestrator {
             synthesis_diagnostics
                 .branch_evidence
                 .push(branch_evidence_diagnostics(
-                    &execution_step.expect("execution step should exist when memory view exists").id,
+                    &execution_step
+                        .expect("execution step should exist when memory view exists")
+                        .id,
                     &routing.target,
                     "execution",
                     view,
@@ -541,8 +543,13 @@ impl HybridOrchestrator {
                     |(support_request, memory_view)| async move {
                         (
                             memory_view,
-                            self.call_with_tools_collect(support_request, registry, None, invocation)
-                                .await,
+                            self.call_with_tools_collect(
+                                support_request,
+                                registry,
+                                None,
+                                invocation,
+                            )
+                            .await,
                         )
                     },
                 ));
@@ -556,12 +563,14 @@ impl HybridOrchestrator {
                 {
                     if let Some(view) = memory_view.as_ref() {
                         synthesis_diagnostics.memory_slicing_applied = true;
-                        synthesis_diagnostics.branch_evidence.push(branch_evidence_diagnostics(
-                            &step.id,
-                            &step.agent,
-                            "support",
-                            view,
-                        ));
+                        synthesis_diagnostics
+                            .branch_evidence
+                            .push(branch_evidence_diagnostics(
+                                &step.id,
+                                &step.agent,
+                                "support",
+                                view,
+                            ));
                     }
                     match support_result {
                         Ok((support_response, _support_summary, support_usage)) => {
@@ -604,17 +613,16 @@ impl HybridOrchestrator {
         };
 
         // ── Step 5: Quality gate ──
-        let (verdict, quality_method) = if routing.from_memory
-            && self.config.agent.quality_gate.auto_accept_learned
-        {
-            (
-                QualityVerdict::Accept { score: Some(1.0) },
-                QualityMethod::AutoAccept,
-            )
-        } else {
-            self.evaluate_quality(classification, &response, message, registry)
-                .await?
-        };
+        let (verdict, quality_method) =
+            if routing.from_memory && self.config.agent.quality_gate.auto_accept_learned {
+                (
+                    QualityVerdict::Accept { score: Some(1.0) },
+                    QualityMethod::AutoAccept,
+                )
+            } else {
+                self.evaluate_quality(classification, &response, message, registry)
+                    .await?
+            };
 
         let mut escalated = false;
         let mut final_response = response;
@@ -657,7 +665,7 @@ impl HybridOrchestrator {
                     let esc_system_prompt = if let Some(ref agent) = esc_agent {
                         self.generate_system_prompt(
                             agent,
-                            &classification,
+                            classification,
                             classification.language.as_deref(),
                         )
                     } else {
@@ -686,7 +694,13 @@ impl HybridOrchestrator {
                     };
 
                     match self
-                        .call_with_tools(esc_request, registry, plugins, &mut total_usage, invocation)
+                        .call_with_tools(
+                            esc_request,
+                            registry,
+                            plugins,
+                            &mut total_usage,
+                            invocation,
+                        )
                         .await
                     {
                         Ok((esc_response, esc_summary)) => {
@@ -817,9 +831,8 @@ impl HybridOrchestrator {
                         verification = Some(verification_diagnostics(&report));
                         final_response = tool_verified_response(&final_response, &report);
 
-                        let can_retry_tools = report.should_retry_tools
-                            && tool_defs.is_some()
-                            && plugins.is_some();
+                        let can_retry_tools =
+                            report.should_retry_tools && tool_defs.is_some() && plugins.is_some();
                         if !can_retry_tools {
                             break;
                         }
@@ -867,7 +880,9 @@ impl HybridOrchestrator {
                                 final_response = remediated;
                                 tool_summary.merge(remediation_summary);
 
-                                if !progress_made && tool_summary.rounds == rounds_before_remediation {
+                                if !progress_made
+                                    && tool_summary.rounds == rounds_before_remediation
+                                {
                                     if let Some(details) = verification.as_mut() {
                                         details.should_retry_tools = false;
                                         push_unique(
@@ -911,8 +926,7 @@ impl HybridOrchestrator {
         }
 
         if synthesis_diagnostics.memory_slicing_applied {
-            synthesis_diagnostics.reconciliation_strategy =
-                Some("weighted_branch_evidence".into());
+            synthesis_diagnostics.reconciliation_strategy = Some("weighted_branch_evidence".into());
         }
 
         let contradiction_scan = contradiction_scan(&specialist_drafts);
@@ -924,7 +938,8 @@ impl HybridOrchestrator {
         if synthesis_diagnostics.reconciliation_strategy.is_none()
             && contradiction_scan.conflicting_branches > 0
         {
-            synthesis_diagnostics.reconciliation_strategy = Some("weighted_branch_evidence_with_conflict_scan".into());
+            synthesis_diagnostics.reconciliation_strategy =
+                Some("weighted_branch_evidence_with_conflict_scan".into());
         }
 
         if should_primary_synthesize(&served_by) {
@@ -978,18 +993,15 @@ impl HybridOrchestrator {
                 Ok(report) => {
                     verification = Some(verification_diagnostics(&report));
                     final_response = tool_verified_response(&final_response, &report);
-                    post_synthesis_drift_corrected = content_before_post_synthesis
-                        .as_deref()
-                        .map(str::trim)
-                        != final_response.content.as_deref().map(str::trim);
+                    post_synthesis_drift_corrected =
+                        content_before_post_synthesis.as_deref().map(str::trim)
+                            != final_response.content.as_deref().map(str::trim);
                 }
                 Err(e) => {
                     verification = Some(VerificationDiagnostics {
                         grounded: false,
                         should_retry_tools: tool_summary.requires_follow_up_verification(),
-                        issues: vec![format!(
-                            "post-synthesis verification failed: {e}"
-                        )],
+                        issues: vec![format!("post-synthesis verification failed: {e}")],
                         retry_instruction: tool_summary.retry_instruction(),
                     });
                     warn!(error = %e, "Post-synthesis verification failed, using synthesized response");
@@ -1001,7 +1013,8 @@ impl HybridOrchestrator {
             let verification_note = verification.as_ref().map(|details| {
                 if details.grounded {
                     if post_synthesis_drift_corrected {
-                        "Tool-grounded after final post-synthesis verification corrected drift.".to_string()
+                        "Tool-grounded after final post-synthesis verification corrected drift."
+                            .to_string()
                     } else if post_synthesis_verification_attempted {
                         "Tool-grounded after final post-synthesis verification.".to_string()
                     } else {
@@ -1041,7 +1054,9 @@ impl HybridOrchestrator {
                 had_failures: tool_summary.had_failures,
                 had_blocked_calls: tool_summary.had_blocked_calls,
                 verification_attempted,
-                grounded: verification.as_ref().is_some_and(|details| details.grounded),
+                grounded: verification
+                    .as_ref()
+                    .is_some_and(|details| details.grounded),
                 remediation_attempted,
                 remediation_succeeded,
                 post_synthesis_verification_attempted,
@@ -1145,7 +1160,10 @@ impl HybridOrchestrator {
                 summary.tool_names.push(tc.name.clone());
                 let started_at = chrono::Utc::now();
                 let exec_start = std::time::Instant::now();
-                let fallback_session = invocation.session_id.cloned().unwrap_or_else(SessionId::new);
+                let fallback_session = invocation
+                    .session_id
+                    .cloned()
+                    .unwrap_or_else(SessionId::new);
                 let call_signature = tool_call_signature(tc);
                 let call_count = identical_tool_calls
                     .entry(call_signature)
@@ -1178,7 +1196,8 @@ impl HybridOrchestrator {
 
                 had_tool_issue |= !outcome.is_success();
                 summary.had_failures |= matches!(outcome, ToolExecutionOutcome::Failed { .. });
-                summary.had_blocked_calls |= matches!(outcome, ToolExecutionOutcome::Blocked { .. });
+                summary.had_blocked_calls |=
+                    matches!(outcome, ToolExecutionOutcome::Blocked { .. });
                 let guidance = summary.remember_retry_guidance(&tc.name, &outcome);
                 summary
                     .tool_observations
@@ -1237,7 +1256,9 @@ impl HybridOrchestrator {
                         retry_guidance
                     ),
                 });
-            } else if let Some(verification_instruction) = summary.follow_up_verification_instruction() {
+            } else if let Some(verification_instruction) =
+                summary.follow_up_verification_instruction()
+            {
                 request.messages.push(ChatMessage {
                     role: "system".into(),
                     content: verification_instruction,
@@ -1253,6 +1274,7 @@ impl HybridOrchestrator {
         Ok((response, summary))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn verify_tool_grounding(
         &self,
         classification: &TaskClassification,
@@ -1293,6 +1315,7 @@ impl HybridOrchestrator {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn attempt_tool_remediation(
         &self,
         classification: &TaskClassification,
@@ -1345,6 +1368,7 @@ impl HybridOrchestrator {
         Ok((response, tool_summary, usage))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn synthesize_with_primary(
         &self,
         classification: &TaskClassification,
@@ -1488,7 +1512,11 @@ impl HybridOrchestrator {
             .config
             .sub_agent(&step.agent.name)
             .map(|agent| {
-                self.generate_system_prompt(agent, classification, classification.language.as_deref())
+                self.generate_system_prompt(
+                    agent,
+                    classification,
+                    classification.language.as_deref(),
+                )
             })
             .unwrap_or_default();
         let memory_view = build_branch_memory_view(step, memory_context);
@@ -1549,6 +1577,7 @@ impl HybridOrchestrator {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_synthesis_messages(
         &self,
         classification: &TaskClassification,
@@ -1559,8 +1588,14 @@ impl HybridOrchestrator {
         memory_context: Option<&ngenorca_memory::ContextPack>,
         delegation_plan: Option<&DelegationPlan>,
     ) -> Vec<ChatMessage> {
-        let mut messages =
-            self.build_messages("", conversation, current_message, None, memory_context, delegation_plan);
+        let mut messages = self.build_messages(
+            "",
+            conversation,
+            current_message,
+            None,
+            memory_context,
+            delegation_plan,
+        );
         let draft_history = specialist_draft_history(specialist_drafts, worker_response);
         let branch_policy = specialist_branch_policy_summary(specialist_drafts);
         let contradiction_scan = contradiction_scan(specialist_drafts);
@@ -1640,6 +1675,7 @@ impl HybridOrchestrator {
         messages
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_escalation_messages(
         &self,
         classification: &TaskClassification,
@@ -1694,6 +1730,7 @@ impl HybridOrchestrator {
         messages
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_augmentation_messages(
         &self,
         classification: &TaskClassification,
@@ -1759,7 +1796,14 @@ impl HybridOrchestrator {
         tool_summary: &ToolLoopSummary,
         memory_context: Option<&ngenorca_memory::ContextPack>,
     ) -> Vec<ChatMessage> {
-        let mut messages = self.build_messages("", conversation, current_message, None, memory_context, None);
+        let mut messages = self.build_messages(
+            "",
+            conversation,
+            current_message,
+            None,
+            memory_context,
+            None,
+        );
         let tool_report = serde_json::json!({
             "tools_used": tool_summary.tool_names,
             "had_failures": tool_summary.had_failures,
@@ -1806,6 +1850,7 @@ impl HybridOrchestrator {
         messages
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_tool_remediation_messages(
         &self,
         classification: &TaskClassification,
@@ -1940,11 +1985,8 @@ impl HybridOrchestrator {
         }
 
         let agent = self.config.sub_agent(&rule.target_agent)?;
-        let system_prompt = self.generate_system_prompt(
-            agent,
-            classification,
-            classification.language.as_deref(),
-        );
+        let system_prompt =
+            self.generate_system_prompt(agent, classification, classification.language.as_deref());
 
         Some(RoutingDecision {
             target: SubAgentId {
@@ -2117,7 +2159,9 @@ impl HybridOrchestrator {
             .sub_agents
             .iter()
             .filter(|agent| !exclude_names.iter().any(|name| agent.name == *name))
-            .filter(|agent| complexity_within_limit(classification.complexity, &agent.max_complexity))
+            .filter(|agent| {
+                complexity_within_limit(classification.complexity, &agent.max_complexity)
+            })
             .filter(|agent| {
                 agent.roles.iter().any(|role| {
                     preferred_roles
@@ -2441,7 +2485,10 @@ fn should_build_delegation_plan(
         || (classification.complexity >= TaskComplexity::Moderate
             && matches!(
                 classification.intent,
-                TaskIntent::Planning | TaskIntent::Analysis | TaskIntent::Coding | TaskIntent::ToolUse
+                TaskIntent::Planning
+                    | TaskIntent::Analysis
+                    | TaskIntent::Coding
+                    | TaskIntent::ToolUse
             ))
 }
 
@@ -2474,7 +2521,10 @@ fn delegation_plan_diagnostics(plan: &DelegationPlan) -> DelegationPlanDiagnosti
     }
 }
 
-fn parallel_support_steps(plan: &DelegationPlan, main_target: &SubAgentId) -> Vec<DelegationPlanStep> {
+fn parallel_support_steps(
+    plan: &DelegationPlan,
+    main_target: &SubAgentId,
+) -> Vec<DelegationPlanStep> {
     if !plan.strategy.starts_with("parallel") {
         return Vec::new();
     }
@@ -2672,7 +2722,11 @@ fn build_branch_memory_view(
         .map(|fact| fact.fact.len())
         .sum::<usize>()
         / 4
-        + episodic_snippets.iter().map(|entry| entry.content.len()).sum::<usize>() / 4
+        + episodic_snippets
+            .iter()
+            .map(|entry| entry.content.len())
+            .sum::<usize>()
+            / 4
         + working_messages
             .iter()
             .map(|message| message.content.len())
@@ -2696,7 +2750,13 @@ fn build_branch_memory_view(
         ));
     }
     for episode in &context.episodic_snippets {
-        let summary = if episode.summary.as_deref().unwrap_or_default().trim().is_empty() {
+        let summary = if episode
+            .summary
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
             trim_snippet(&episode.content, 120)
         } else {
             trim_snippet(episode.summary.as_deref().unwrap_or_default(), 120)
@@ -2769,9 +2829,7 @@ impl ToolLoopSummary {
     }
 
     fn requires_follow_up_verification(&self) -> bool {
-        self.had_failures
-            || self.needs_write_verification()
-            || self.needs_command_verification()
+        self.had_failures || self.needs_write_verification() || self.needs_command_verification()
     }
 
     fn merge(&mut self, mut other: Self) {
@@ -2826,7 +2884,9 @@ impl ToolLoopSummary {
             .rposition(|name| name == "read_file" || name == "grep_workspace");
 
         match last_write {
-            Some(last_write) => last_readback.map_or(true, |last_readback| last_readback < last_write),
+            Some(last_write) => {
+                last_readback.is_none_or(|last_readback| last_readback < last_write)
+            }
             None => false,
         }
     }
@@ -2899,14 +2959,17 @@ impl ToolLoopSummary {
     }
 
     fn should_abandon_tool_retries(&self) -> bool {
-        !self.repeated_failure_tools().is_empty() && (self.had_blocked_calls || self.attempt_trace.len() >= 4)
+        !self.repeated_failure_tools().is_empty()
+            && (self.had_blocked_calls || self.attempt_trace.len() >= 4)
     }
 
     fn latest_command_failure_issue(&self) -> Option<String> {
         self.tool_observations
             .iter()
             .rev()
-            .find(|observation| observation.tool == "run_command" && !observation.command_succeeded())
+            .find(|observation| {
+                observation.tool == "run_command" && !observation.command_succeeded()
+            })
             .map(|observation| observation.command_failure_issue())
     }
 
@@ -2917,7 +2980,10 @@ impl ToolLoopSummary {
             issues.push("one or more tool invocations failed".into());
         }
         if self.had_blocked_calls {
-            issues.push("one or more repeated tool calls were blocked to prevent shallow retry loops".into());
+            issues.push(
+                "one or more repeated tool calls were blocked to prevent shallow retry loops"
+                    .into(),
+            );
         }
         if self.needs_write_verification() {
             issues.push("file edits were not read back after the last write".into());
@@ -2961,7 +3027,8 @@ impl ToolLoopSummary {
 
         if self.tool_names.iter().any(|name| name == "read_file") {
             hints.push(
-                "Only claim file contents that appear in the returned `read_file` line range.".into(),
+                "Only claim file contents that appear in the returned `read_file` line range."
+                    .into(),
             );
         }
         if self.tool_names.iter().any(|name| name == "write_file") {
@@ -3069,10 +3136,10 @@ impl ToolObservation {
             }
         }
 
-        if self.retryable {
-            if let Some(error) = self.error.as_deref() {
-                return format!("verification command '{command}' failed: {error}");
-            }
+        if self.retryable
+            && let Some(error) = self.error.as_deref()
+        {
+            return format!("verification command '{command}' failed: {error}");
         }
 
         format!("verification command '{command}' did not complete successfully")
@@ -3178,16 +3245,19 @@ fn contradiction_scan(drafts: &[SpecialistDraft]) -> ContradictionScan {
         } else {
             0.0
         };
-        let reliability_bias = if anchor.reliability == "grounded" && draft.reliability != "grounded"
-        {
-            0.04
-        } else {
-            0.0
-        };
-        let score = (
-            overlap_divergence + marker_bias + action_bias + numeric_bias + priority_bias + reliability_bias
-        )
-        .clamp(0.0, 1.0);
+        let reliability_bias =
+            if anchor.reliability == "grounded" && draft.reliability != "grounded" {
+                0.04
+            } else {
+                0.0
+            };
+        let score = (overlap_divergence
+            + marker_bias
+            + action_bias
+            + numeric_bias
+            + priority_bias
+            + reliability_bias)
+            .clamp(0.0, 1.0);
         let materially_conflicting = !conflicting_actions.is_empty()
             || has_numeric_conflict
             || (has_conflict_markers && overlap < 0.62);
@@ -3282,7 +3352,9 @@ fn contains_conflict_markers(content: &str) -> bool {
 
 fn action_polarity_map(content: &str) -> std::collections::BTreeMap<String, bool> {
     let mut actions = std::collections::BTreeMap::new();
-    let negators = ["not", "never", "avoid", "skip", "without", "instead", "don't"];
+    let negators = [
+        "not", "never", "avoid", "skip", "without", "instead", "don't",
+    ];
 
     for raw_sentence in content
         .split(['.', '!', '?', '\n', ';'])
@@ -3446,7 +3518,7 @@ fn worker_contract(agent: &SubAgentConfig, classification: &TaskClassification) 
     let mut contract = String::from(
         "You are a delegated specialist working on behalf of NgenOrca, the primary assistant. \
 Do not present yourself as a separate assistant, do not mention internal routing, and do not ask the user to choose between agents. \
-Return content that NgenOrca can send directly to the user."
+Return content that NgenOrca can send directly to the user.",
     );
 
     contract.push_str(&format!(
@@ -3606,7 +3678,10 @@ fn parse_tool_verification_report(
         issues: default_issues.clone(),
     };
 
-    let Some(raw) = raw.map(strip_json_fence).filter(|raw| !raw.trim().is_empty()) else {
+    let Some(raw) = raw
+        .map(strip_json_fence)
+        .filter(|raw| !raw.trim().is_empty())
+    else {
         return fallback();
     };
 
@@ -3698,9 +3773,12 @@ fn format_tool_feedback(tc: &ToolCallResponse, outcome: &ToolExecutionOutcome) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngenorca_config::SubAgentConfig;
-    use ngenorca_core::orchestration::{ClassificationMethod, CorrectionRecord, OrchestrationRecord, QualityMethod, QualityVerdict, SynthesisRecord};
     use crate::orchestration::LearnedRouter;
+    use ngenorca_config::SubAgentConfig;
+    use ngenorca_core::orchestration::{
+        ClassificationMethod, CorrectionRecord, OrchestrationRecord, QualityMethod, QualityVerdict,
+        SynthesisRecord,
+    };
 
     fn test_config() -> NgenOrcaConfig {
         let mut config = NgenOrcaConfig::default();
@@ -3930,17 +4008,22 @@ mod tests {
         assert_eq!(info.sub_agents.len(), 3);
         assert_eq!(info.routing_strategy, "Hybrid");
         assert!(info.execution_diagnostics.response_metadata_exposed);
-        assert!(info
-            .execution_diagnostics
-            .worker_stage_reporting
-            .contains(&"parallel-support".to_string()));
+        assert!(
+            info.execution_diagnostics
+                .worker_stage_reporting
+                .contains(&"parallel-support".to_string())
+        );
         assert!(info.execution_diagnostics.tracks_tool_verification);
-        assert!(info.execution_diagnostics.tracks_branch_contradiction_analysis);
+        assert!(
+            info.execution_diagnostics
+                .tracks_branch_contradiction_analysis
+        );
         assert!(info.execution_diagnostics.tracks_learned_route_trends);
-        assert!(info
-            .execution_diagnostics
-            .worker_stage_reporting
-            .contains(&"escalation".to_string()));
+        assert!(
+            info.execution_diagnostics
+                .worker_stage_reporting
+                .contains(&"escalation".to_string())
+        );
     }
 
     #[test]
@@ -4007,7 +4090,9 @@ mod tests {
         };
         let routing = orch.route(&classification);
 
-        let plan = orch.build_delegation_plan(&classification, &routing).unwrap();
+        let plan = orch
+            .build_delegation_plan(&classification, &routing)
+            .unwrap();
         assert_eq!(plan.strategy, "parallel-framing-and-execution");
         assert_eq!(plan.steps.len(), 3);
         assert_eq!(plan.steps[0].agent.name, "deep-thinker");
@@ -4028,7 +4113,9 @@ mod tests {
         };
         let routing = orch.route(&classification);
 
-        let plan = orch.build_delegation_plan(&classification, &routing).unwrap();
+        let plan = orch
+            .build_delegation_plan(&classification, &routing)
+            .unwrap();
         assert_eq!(plan.strategy, "parallel-multi-branch");
         assert_eq!(plan.steps.len(), 4);
         assert_eq!(plan.steps[0].agent.name, "deep-thinker");
@@ -4153,7 +4240,8 @@ mod tests {
             episodic_snippets: vec![ngenorca_memory::episodic::EpisodicEntry {
                 id: 10,
                 user_id: "user-1".into(),
-                content: "Last outage came from a missing environment variable in production.".into(),
+                content: "Last outage came from a missing environment variable in production."
+                    .into(),
                 summary: Some("Earlier outage caused by missing environment variable.".into()),
                 channel: "web".into(),
                 timestamp: chrono::Utc::now(),
@@ -4180,19 +4268,26 @@ mod tests {
 
         assert_eq!(request.model, "anthropic/claude-sonnet-4-20250514");
         assert!(request.tools.is_none());
-        assert_eq!(memory_view.unwrap().memory_scope, "goal-and-constraint slice");
+        assert_eq!(
+            memory_view.unwrap().memory_scope,
+            "goal-and-constraint slice"
+        );
         assert!(request.messages.iter().any(|m| {
             m.role == "system"
                 && m.content.contains("parallel support branch")
                 && m.content.contains("Step id: frame-task")
-                && m.content.contains("do not present this as the final user answer")
+                && m.content
+                    .contains("do not present this as the final user answer")
         }));
         assert!(request.messages.iter().any(|m| {
             m.role == "system"
-                && m.content.contains("Branch memory scope: goal-and-constraint slice")
+                && m.content
+                    .contains("Branch memory scope: goal-and-constraint slice")
                 && m.content.contains("Evidence focus:")
-                && m.content.contains("semantic::goal::Needs a deployment failure triage plan")
-                && m.content.contains("working::user::Check likely causes before touching code.")
+                && m.content
+                    .contains("semantic::goal::Needs a deployment failure triage plan")
+                && m.content
+                    .contains("working::user::Check likely causes before touching code.")
         }));
     }
 
@@ -4288,7 +4383,11 @@ mod tests {
             None,
         );
 
-        assert!(messages.iter().any(|m| m.role == "assistant" && m.content.contains("Worker draft")));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "assistant" && m.content.contains("Worker draft"))
+        );
         assert!(messages.iter().any(|m| {
             m.role == "system"
                 && m.content.contains("Specialist draft history")
@@ -4302,14 +4401,16 @@ mod tests {
             m.role == "system"
                 && m.content.contains("Branch reconciliation policy")
                 && m.content.contains("grounded or corrected execution draft")
-                && m.content.contains("role=execution, reliability=working, priority=70")
+                && m.content
+                    .contains("role=execution, reliability=working, priority=70")
         }));
         assert!(messages.iter().any(|m| {
             m.role == "system"
                 && m.content.contains("final answer as NgenOrca")
                 && m.content.contains("without mentioning delegation")
                 && m.content.contains("Reconcile the specialist drafts")
-                && m.content.contains("Grounded execution drafts outrank advisory support branches")
+                && m.content
+                    .contains("Grounded execution drafts outrank advisory support branches")
                 && m.content.contains("Use each branch's evidence slice")
                 && m.content.contains("rust, workspace")
         }));
@@ -4344,10 +4445,15 @@ mod tests {
             None,
         );
 
-        assert!(messages.iter().any(|m| m.role == "assistant" && m.content == "Initial worker draft"));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "assistant" && m.content == "Initial worker draft")
+        );
         assert!(messages.iter().any(|m| {
             m.role == "system"
-                && m.content.contains("taking over from a previous specialist draft")
+                && m.content
+                    .contains("taking over from a previous specialist draft")
                 && m.content.contains("local-general/ollama/llama3.1:8b")
                 && m.content.contains("response was too shallow")
         }));
@@ -4382,15 +4488,21 @@ mod tests {
             None,
         );
 
-        assert!(messages.iter().any(|m| m.role == "assistant" && m.content == "Partial rollout plan"));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "assistant" && m.content == "Partial rollout plan")
+        );
         assert!(messages.iter().any(|m| {
             m.role == "system"
-                && m.content.contains("revising your own earlier specialist draft")
+                && m.content
+                    .contains("revising your own earlier specialist draft")
                 && m.content.contains("rollback and verification steps")
         }));
         assert!(messages.iter().any(|m| {
             m.role == "user"
-                && m.content.contains("fully covers: rollback and verification steps")
+                && m.content
+                    .contains("fully covers: rollback and verification steps")
         }));
     }
 
@@ -4424,8 +4536,12 @@ mod tests {
                 reliability: "corrected".into(),
                 priority_weight: 90,
                 memory_scope: Some("execution slice".into()),
-                evidence_focus: Some("Check the same execution evidence with a stronger model.".into()),
-                evidence_items: vec!["episodic::2025-01-01::Prior build failed after dependency bump".into()],
+                evidence_focus: Some(
+                    "Check the same execution evidence with a stronger model.".into(),
+                ),
+                evidence_items: vec![
+                    "episodic::2025-01-01::Prior build failed after dependency bump".into(),
+                ],
             },
         ];
 
@@ -4476,13 +4592,18 @@ mod tests {
             None,
         );
 
-        assert!(messages.iter().any(|m| m.role == "assistant" && m.content == "Draft answer"));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "assistant" && m.content == "Draft answer")
+        );
         assert!(messages.iter().any(|m| {
             m.role == "system"
                 && m.content.contains("grounded in the observed tool results")
                 && m.content.contains("run_command")
                 && m.content.contains("tool feedback body")
-                && m.content.contains("Inspect stdout/stderr before retrying once")
+                && m.content
+                    .contains("Inspect stdout/stderr before retrying once")
         }));
         assert!(messages.iter().any(|m| {
             m.role == "system"
@@ -4535,7 +4656,11 @@ mod tests {
             None,
         );
 
-        assert!(messages.iter().any(|m| m.role == "assistant" && m.content == "Draft answer"));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == "assistant" && m.content == "Draft answer")
+        );
         assert!(messages.iter().any(|m| {
             m.role == "system"
                 && m.content.contains("still needs one corrective pass")
@@ -4569,7 +4694,8 @@ mod tests {
         assert_eq!(parsed.corrected_answer, "Need to verify");
         assert_eq!(parsed.retry_instruction.as_deref(), Some("Use read_file"));
 
-        let fallback = parse_tool_verification_report(Some("plain corrected answer"), "fallback", &summary);
+        let fallback =
+            parse_tool_verification_report(Some("plain corrected answer"), "fallback", &summary);
         assert_eq!(fallback.corrected_answer, "plain corrected answer");
         assert!(fallback.should_retry_tools);
     }
@@ -4611,7 +4737,10 @@ mod tests {
         let diagnostics = verification_diagnostics(&report);
         assert!(!diagnostics.grounded);
         assert!(diagnostics.should_retry_tools);
-        assert_eq!(diagnostics.retry_instruction.as_deref(), Some("Use read_file"));
+        assert_eq!(
+            diagnostics.retry_instruction.as_deref(),
+            Some("Use read_file")
+        );
         assert_eq!(diagnostics.issues, vec!["write not confirmed"]);
     }
 
@@ -4702,10 +4831,11 @@ mod tests {
         assert!(scan.score >= 0.45);
         assert_eq!(scan.conflicting_branches, 1);
         assert_eq!(scan.anchor_stage.as_deref(), Some("verified"));
-        assert!(scan
-            .signals
-            .iter()
-            .any(|signal| signal.contains("negated_action_overlap")));
+        assert!(
+            scan.signals
+                .iter()
+                .any(|signal| signal.contains("negated_action_overlap"))
+        );
         assert!(scan.summary[0].contains("parallel-support"));
     }
 
@@ -4733,7 +4863,8 @@ mod tests {
                     name: "deep-thinker".into(),
                     model: "anthropic/claude-sonnet-4".into(),
                 },
-                content: "However, set the timeout to 45 seconds and use retry count 4 instead.".into(),
+                content: "However, set the timeout to 45 seconds and use retry count 4 instead."
+                    .into(),
                 note: None,
                 branch_role: "support".into(),
                 reliability: "advisory".into(),
@@ -4746,7 +4877,11 @@ mod tests {
 
         let scan = contradiction_scan(&drafts);
         assert_eq!(scan.conflicting_branches, 1);
-        assert!(scan.signals.iter().any(|signal| signal == "numeric_mismatch"));
+        assert!(
+            scan.signals
+                .iter()
+                .any(|signal| signal == "numeric_mismatch")
+        );
     }
 
     #[test]
@@ -4763,7 +4898,11 @@ mod tests {
     fn test_tool_loop_summary_detects_post_edit_command_verification_gap() {
         let summary = ToolLoopSummary {
             rounds: 2,
-            tool_names: vec!["write_file".into(), "run_command".into(), "write_file".into()],
+            tool_names: vec![
+                "write_file".into(),
+                "run_command".into(),
+                "write_file".into(),
+            ],
             tool_feedback: vec![],
             tool_observations: vec![
                 ToolObservation {
@@ -4802,9 +4941,11 @@ mod tests {
 
         assert!(summary.needs_command_verification());
         assert!(summary.requires_follow_up_verification());
-        assert!(summary
-            .follow_up_verification_instruction()
-            .is_some_and(|instruction| instruction.contains("focused verification command")));
+        assert!(
+            summary
+                .follow_up_verification_instruction()
+                .is_some_and(|instruction| instruction.contains("focused verification command"))
+        );
     }
 
     #[test]
@@ -4862,11 +5003,14 @@ mod tests {
             ],
         };
 
-        assert_eq!(summary.repeated_failure_tools(), vec!["run_command".to_string()]);
+        assert_eq!(
+            summary.repeated_failure_tools(),
+            vec!["run_command".to_string()]
+        );
         assert!(summary.should_abandon_tool_retries());
-        assert!(summary
-            .retry_instruction()
-            .is_some_and(|instruction| instruction.contains("stop retrying the same recovery path")));
+        assert!(summary.retry_instruction().is_some_and(|instruction| {
+            instruction.contains("stop retrying the same recovery path")
+        }));
     }
 
     #[test]
@@ -4904,17 +5048,21 @@ mod tests {
         };
 
         let report = parse_tool_verification_report(
-            Some("```json\n{\"grounded\":false,\"should_retry_tools\":true,\"corrected_answer\":\"Need more verification\",\"retry_instruction\":null,\"issues\":[]}\n```"),
+            Some(
+                "```json\n{\"grounded\":false,\"should_retry_tools\":true,\"corrected_answer\":\"Need more verification\",\"retry_instruction\":null,\"issues\":[]}\n```",
+            ),
             "fallback",
             &summary,
         );
 
         assert!(!report.grounded);
         assert!(report.should_retry_tools);
-        assert!(report
-            .issues
-            .iter()
-            .any(|issue| issue.contains("verification command 'cargo' exited with code 101")));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.contains("verification command 'cargo' exited with code 101"))
+        );
     }
 
     #[test]

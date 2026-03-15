@@ -51,7 +51,9 @@ pub async fn register_builtin_tools(registry: &PluginRegistry, config: &NgenOrca
         .register_tool(Arc::new(ReadWorkspaceFileTool::new(workspace_root.clone())))
         .await;
     registry
-        .register_tool(Arc::new(WriteWorkspaceFileTool::new(workspace_root.clone())))
+        .register_tool(Arc::new(WriteWorkspaceFileTool::new(
+            workspace_root.clone(),
+        )))
         .await;
     registry
         .register_tool(Arc::new(GrepWorkspaceTool::new(workspace_root.clone())))
@@ -66,7 +68,9 @@ pub async fn register_builtin_tools(registry: &PluginRegistry, config: &NgenOrca
         .register_tool(Arc::new(ValidateSkillTool::new(skill_store.clone())))
         .await;
     registry
-        .register_tool(Arc::new(SynthesizeSkillScriptTool::new(skill_store.clone())))
+        .register_tool(Arc::new(SynthesizeSkillScriptTool::new(
+            skill_store.clone(),
+        )))
         .await;
     registry
         .register_tool(Arc::new(ExecuteSkillStagesTool::new(
@@ -190,11 +194,9 @@ async fn run_command_capture(
     let policy = command_sandbox_policy(timeout_secs, workspace_root, sandbox);
     let string_args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
     let output = if sandbox.enabled {
-        ngenorca_sandbox::sandboxed_exec_with_cwd(command, &string_args, Some(cwd), &policy)
-            .await
+        ngenorca_sandbox::sandboxed_exec_with_cwd(command, &string_args, Some(cwd), &policy).await
     } else {
-        ngenorca_sandbox::unsandboxed_exec_with_cwd(command, &string_args, Some(cwd), &policy)
-            .await
+        ngenorca_sandbox::unsandboxed_exec_with_cwd(command, &string_args, Some(cwd), &policy).await
     }
     .map_err(|e| Error::Sandbox(format!("Failed to run command '{command}': {e}")))?;
 
@@ -312,7 +314,7 @@ impl AgentTool for ListDirectoryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "list_dir".into(),
-            description: "List files and directories inside the configured workspace." .into(),
+            description: "List files and directories inside the configured workspace.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -337,9 +339,9 @@ impl AgentTool for ListDirectoryTool {
         let dir = self.base.resolve(requested)?;
 
         let mut entries = Vec::new();
-        for entry in std::fs::read_dir(&dir)
-            .map_err(|e| Error::NotFound(format!("Cannot list directory '{}': {e}", dir.display())))?
-        {
+        for entry in std::fs::read_dir(&dir).map_err(|e| {
+            Error::NotFound(format!("Cannot list directory '{}': {e}", dir.display()))
+        })? {
             let entry = entry.map_err(|e| Error::Gateway(format!("Directory entry error: {e}")))?;
             let meta = entry
                 .metadata()
@@ -383,7 +385,8 @@ impl AgentTool for ReadWorkspaceFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read a text file from the configured workspace, optionally by line range.".into(),
+            description:
+                "Read a text file from the configured workspace, optionally by line range.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -500,12 +503,13 @@ impl AgentTool for WriteWorkspaceFileTool {
             .unwrap_or(true);
 
         let file_path = self.base.resolve(path)?;
-        if create_dirs {
-            if let Some(parent) = file_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    Error::Gateway(format!("Cannot create parent directories '{}': {e}", parent.display()))
-                })?;
-            }
+        if create_dirs && let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::Gateway(format!(
+                    "Cannot create parent directories '{}': {e}",
+                    parent.display()
+                ))
+            })?;
         }
 
         if append {
@@ -514,7 +518,9 @@ impl AgentTool for WriteWorkspaceFileTool {
                 .create(true)
                 .append(true)
                 .open(&file_path)
-                .map_err(|e| Error::Gateway(format!("Cannot open file '{}': {e}", file_path.display())))?;
+                .map_err(|e| {
+                    Error::Gateway(format!("Cannot open file '{}': {e}", file_path.display()))
+                })?;
             file.write_all(content.as_bytes()).map_err(|e| {
                 Error::Gateway(format!("Cannot append file '{}': {e}", file_path.display()))
             })?;
@@ -579,7 +585,14 @@ fn collect_text_matches(
             if should_skip_dir(&file_name) {
                 continue;
             }
-            collect_text_matches(&path, workspace_root, query, case_sensitive, max_results, out)?;
+            collect_text_matches(
+                &path,
+                workspace_root,
+                query,
+                case_sensitive,
+                max_results,
+                out,
+            )?;
             continue;
         }
 
@@ -719,7 +732,9 @@ impl AgentTool for FetchUrlTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Gateway("Missing 'url'".into()))?;
         if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return Err(Error::Unauthorized("Only http:// and https:// URLs are allowed".into()));
+            return Err(Error::Unauthorized(
+                "Only http:// and https:// URLs are allowed".into(),
+            ));
         }
 
         let max_chars = arguments
@@ -1079,7 +1094,13 @@ mod tests {
         let args = successful_command_args();
 
         let result = tool.execute(args, &SessionId::new(), None).await.unwrap();
-        assert!(result["stdout"].as_str().unwrap().to_lowercase().contains("hello"));
+        assert!(
+            result["stdout"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("hello")
+        );
         assert_eq!(result["sandboxed"], true);
         assert_eq!(result["sandbox_policy"]["allow_network"], false);
         assert!(result["sandbox_audit"]["backend"].is_string());
@@ -1088,8 +1109,10 @@ mod tests {
     #[tokio::test]
     async fn run_command_honors_disabled_sandbox() {
         let workspace = temp_workspace();
-        let mut sandbox = SandboxConfig::default();
-        sandbox.enabled = false;
+        let sandbox = SandboxConfig {
+            enabled: false,
+            ..SandboxConfig::default()
+        };
         let tool = RunCommandTool::new(workspace, sandbox);
 
         let args = successful_command_args();
@@ -1160,8 +1183,14 @@ mod tests {
         assert_eq!(validation["validation"]["executable"], true);
         assert_eq!(validation["validation"]["can_save"], true);
         assert_eq!(validation["validation"]["can_approve"], false);
-        assert_eq!(validation["validation"]["approval_stage"], "ready-for-approval");
-        assert_eq!(validation["validation"]["generated_script"]["language"], "bash");
+        assert_eq!(
+            validation["validation"]["approval_stage"],
+            "ready-for-approval"
+        );
+        assert_eq!(
+            validation["validation"]["generated_script"]["language"],
+            "bash"
+        );
 
         let result = save_tool
             .execute(
@@ -1253,11 +1282,13 @@ mod tests {
         assert_eq!(report["validation"]["can_save"], false);
         assert_eq!(report["validation"]["requires_operator_review"], true);
         assert_eq!(report["validation"]["approval_stage"], "needs-fixes");
-        assert!(report["validation"]["missing_verification_steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "Run command"));
+        assert!(
+            report["validation"]["missing_verification_steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "Run command")
+        );
     }
 
     #[tokio::test]
@@ -1291,13 +1322,20 @@ mod tests {
 
         assert_eq!(result["generated"], true);
         assert_eq!(result["script"]["language"], "bash");
-        assert!(result["script"]["content"].as_str().unwrap().contains("cargo"));
+        assert!(
+            result["script"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("cargo")
+        );
         assert_eq!(result["approval_stage"], "awaiting-review");
-        assert!(result["approval_checklist"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value.as_str().unwrap().contains("generated script preview")));
+        assert!(
+            result["approval_checklist"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str().unwrap().contains("generated script preview"))
+        );
     }
 
     #[tokio::test]
@@ -1305,11 +1343,8 @@ mod tests {
         let workspace = temp_workspace();
         let store = SkillStore::new(workspace.join("skills"));
         let save_tool = SaveSkillTool::new(store.clone());
-        let exec_tool = ExecuteSkillStagesTool::new(
-            store.clone(),
-            workspace.clone(),
-            SandboxConfig::default(),
-        );
+        let exec_tool =
+            ExecuteSkillStagesTool::new(store.clone(), workspace.clone(), SandboxConfig::default());
 
         save_tool
             .execute(
@@ -1352,15 +1387,20 @@ mod tests {
         assert_eq!(result["executed"], true);
         assert_eq!(result["status"], "completed");
         assert_eq!(result["journal"]["executed_steps"], 1);
-        assert!(result["journal"]["steps"][0]["result"]["stdout"]
-            .as_str()
-            .unwrap()
-            .to_lowercase()
-            .contains("hello"));
+        assert!(
+            result["journal"]["steps"][0]["result"]["stdout"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("hello")
+        );
 
         let stored = store.get("echo-smoke").unwrap();
         assert_eq!(stored.lifecycle.execution_count, 1);
-        assert_eq!(stored.lifecycle.last_execution_status.as_deref(), Some("completed"));
+        assert_eq!(
+            stored.lifecycle.last_execution_status.as_deref(),
+            Some("completed")
+        );
         assert!(stored.lifecycle.last_checkpoint_at.is_some());
     }
 
@@ -1368,11 +1408,8 @@ mod tests {
     async fn execute_skill_stages_rolls_back_supported_write_steps_after_failure() {
         let workspace = temp_workspace();
         let store = SkillStore::new(workspace.join("skills"));
-        let exec_tool = ExecuteSkillStagesTool::new(
-            store,
-            workspace.clone(),
-            SandboxConfig::default(),
-        );
+        let exec_tool =
+            ExecuteSkillStagesTool::new(store, workspace.clone(), SandboxConfig::default());
 
         let result = exec_tool
             .execute(
@@ -1413,11 +1450,13 @@ mod tests {
 
         assert_eq!(result["status"], "rolled_back");
         assert!(!workspace.join("notes/rollback.txt").exists());
-        assert!(result["journal"]["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step["status"] == "rolled_back"));
+        assert!(
+            result["journal"]["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| step["status"] == "rolled_back")
+        );
     }
 
     #[tokio::test]
@@ -1463,15 +1502,21 @@ mod tests {
         assert_eq!(policy.memory_limit_bytes, 256 * 1024 * 1024);
         assert_eq!(policy.cpu_time_limit_secs, 7);
         assert_eq!(policy.wall_timeout_secs, 5);
-        assert!(policy
-            .allow_read_paths
-            .contains(&workspace.to_string_lossy().to_string()));
-        assert!(!policy
-            .allow_write_paths
-            .contains(&workspace.to_string_lossy().to_string()));
-        assert!(policy
-            .allow_write_paths
-            .contains(&"C:/tmp/ngenorca-write".to_string()));
+        assert!(
+            policy
+                .allow_read_paths
+                .contains(&workspace.to_string_lossy().to_string())
+        );
+        assert!(
+            !policy
+                .allow_write_paths
+                .contains(&workspace.to_string_lossy().to_string())
+        );
+        assert!(
+            policy
+                .allow_write_paths
+                .contains(&"C:/tmp/ngenorca-write".to_string())
+        );
     }
 
     #[test]
@@ -1490,7 +1535,9 @@ mod tests {
                 tool: Some("run_command".into()),
                 arguments: None,
                 verification: Some("Confirm the smoke test passes.".into()),
-                rollback: Some("If the smoke test changes state, revert the test fixture afterward.".into()),
+                rollback: Some(
+                    "If the smoke test changes state, revert the test fixture afterward.".into(),
+                ),
                 checkpoints: vec!["record smoke test result".into()],
                 platform_hints: vec!["linux".into()],
                 requires_confirmation: false,
@@ -1520,7 +1567,10 @@ mod tests {
         assert_eq!(back.lifecycle.status, SkillArtifactStatus::Approved);
         assert_eq!(back.lifecycle.usage_count, 3);
         assert_eq!(back.lifecycle.execution_count, 4);
-        assert_eq!(back.lifecycle.last_execution_status.as_deref(), Some("completed"));
+        assert_eq!(
+            back.lifecycle.last_execution_status.as_deref(),
+            Some("completed")
+        );
     }
 }
 
@@ -1552,7 +1602,8 @@ impl AgentTool for ListSkillsTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "list_skills".into(),
-            description: "List reusable skill and automation artifacts stored for future tasks.".into(),
+            description: "List reusable skill and automation artifacts stored for future tasks."
+                .into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1718,7 +1769,11 @@ impl ExecuteSkillStagesTool {
         Ok((skill, None))
     }
 
-    fn checkpoint_record(label: impl Into<String>, phase: impl Into<String>, detail: Option<String>) -> SkillCheckpointRecord {
+    fn checkpoint_record(
+        label: impl Into<String>,
+        phase: impl Into<String>,
+        detail: Option<String>,
+    ) -> SkillCheckpointRecord {
         SkillCheckpointRecord {
             label: label.into(),
             phase: phase.into(),
@@ -1737,15 +1792,27 @@ impl ExecuteSkillStagesTool {
             .arguments
             .as_ref()
             .and_then(|value| value.as_object())
-            .ok_or_else(|| Error::Gateway(format!("Step {} is missing write_file arguments", step_number)))?;
+            .ok_or_else(|| {
+                Error::Gateway(format!(
+                    "Step {} is missing write_file arguments",
+                    step_number
+                ))
+            })?;
         let path = arguments
             .get("path")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| Error::Gateway(format!("Step {} is missing write_file.path", step_number)))?;
+            .ok_or_else(|| {
+                Error::Gateway(format!("Step {} is missing write_file.path", step_number))
+            })?;
         let content = arguments
             .get("content")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| Error::Gateway(format!("Step {} is missing write_file.content", step_number)))?;
+            .ok_or_else(|| {
+                Error::Gateway(format!(
+                    "Step {} is missing write_file.content",
+                    step_number
+                ))
+            })?;
         let append = arguments
             .get("append")
             .and_then(|value| value.as_bool())
@@ -1756,12 +1823,13 @@ impl ExecuteSkillStagesTool {
             .unwrap_or(true);
 
         let file_path = self.workspace.resolve(path)?;
-        if create_dirs {
-            if let Some(parent) = file_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    Error::Gateway(format!("Cannot create parent directories '{}': {e}", parent.display()))
-                })?;
-            }
+        if create_dirs && let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::Gateway(format!(
+                    "Cannot create parent directories '{}': {e}",
+                    parent.display()
+                ))
+            })?;
         }
 
         let existed_before = file_path.exists();
@@ -1771,10 +1839,16 @@ impl ExecuteSkillStagesTool {
             let artifact = format!("{}-step-{}.bak", journal_id, step_number);
             let backup_path = backup_dir.join(&artifact);
             let bytes = std::fs::read(&file_path).map_err(|e| {
-                Error::Gateway(format!("Cannot snapshot file '{}': {e}", file_path.display()))
+                Error::Gateway(format!(
+                    "Cannot snapshot file '{}': {e}",
+                    file_path.display()
+                ))
             })?;
             std::fs::write(&backup_path, bytes).map_err(|e| {
-                Error::Gateway(format!("Cannot persist rollback snapshot '{}': {e}", backup_path.display()))
+                Error::Gateway(format!(
+                    "Cannot persist rollback snapshot '{}': {e}",
+                    backup_path.display()
+                ))
             })?;
             Some(format!("backups/{}", artifact))
         } else {
@@ -1787,7 +1861,9 @@ impl ExecuteSkillStagesTool {
                 .create(true)
                 .append(true)
                 .open(&file_path)
-                .map_err(|e| Error::Gateway(format!("Cannot open file '{}': {e}", file_path.display())))?;
+                .map_err(|e| {
+                    Error::Gateway(format!("Cannot open file '{}': {e}", file_path.display()))
+                })?;
             file.write_all(content.as_bytes()).map_err(|e| {
                 Error::Gateway(format!("Cannot append file '{}': {e}", file_path.display()))
             })?;
@@ -1814,21 +1890,33 @@ impl ExecuteSkillStagesTool {
         ))
     }
 
-    fn execute_write_rollback(&self, prepared: &PreparedWriteRollback) -> Result<SkillRollbackPlanEntry> {
+    fn execute_write_rollback(
+        &self,
+        prepared: &PreparedWriteRollback,
+    ) -> Result<SkillRollbackPlanEntry> {
         if let Some(artifact) = prepared.backup_artifact.as_deref() {
             let backup_path = self.base.store.execution_root().join(artifact);
             let bytes = std::fs::read(&backup_path).map_err(|e| {
-                Error::Gateway(format!("Cannot read rollback snapshot '{}': {e}", backup_path.display()))
+                Error::Gateway(format!(
+                    "Cannot read rollback snapshot '{}': {e}",
+                    backup_path.display()
+                ))
             })?;
             if let Some(parent) = prepared.target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&prepared.target, bytes).map_err(|e| {
-                Error::Gateway(format!("Cannot restore file '{}': {e}", prepared.target.display()))
+                Error::Gateway(format!(
+                    "Cannot restore file '{}': {e}",
+                    prepared.target.display()
+                ))
             })?;
         } else if !prepared.existed_before && prepared.target.exists() {
             std::fs::remove_file(&prepared.target).map_err(|e| {
-                Error::Gateway(format!("Cannot remove file '{}': {e}", prepared.target.display()))
+                Error::Gateway(format!(
+                    "Cannot remove file '{}': {e}",
+                    prepared.target.display()
+                ))
             })?;
         }
 
@@ -2198,9 +2286,7 @@ impl AgentTool for ExecuteSkillStagesTool {
                 checkpoints: step
                     .checkpoints
                     .iter()
-                    .map(|checkpoint| {
-                        Self::checkpoint_record(checkpoint.clone(), "planned", None)
-                    })
+                    .map(|checkpoint| Self::checkpoint_record(checkpoint.clone(), "planned", None))
                     .collect(),
                 verification: step.verification.clone(),
                 rollback: journal
@@ -2222,11 +2308,18 @@ impl AgentTool for ExecuteSkillStagesTool {
                         .arguments
                         .as_ref()
                         .and_then(|value| value.as_object())
-                        .ok_or_else(|| Error::Gateway(format!("Step {} is missing run_command arguments", step_number)))?;
+                        .ok_or_else(|| {
+                            Error::Gateway(format!(
+                                "Step {} is missing run_command arguments",
+                                step_number
+                            ))
+                        })?;
                     let command = step_args
                         .get("command")
                         .and_then(|value| value.as_str())
-                        .ok_or_else(|| Error::Gateway(format!("Step {} is missing command", step_number)))?;
+                        .ok_or_else(|| {
+                            Error::Gateway(format!("Step {} is missing command", step_number))
+                        })?;
                     let args = step_args
                         .get("args")
                         .and_then(|value| value.as_array())
@@ -2291,7 +2384,8 @@ impl AgentTool for ExecuteSkillStagesTool {
                     }
                 }
                 Some("write_file") => {
-                    let (result, prepared) = self.write_file_step(&journal_id, step_number, step)?;
+                    let (result, prepared) =
+                        self.write_file_step(&journal_id, step_number, step)?;
                     record.result = Some(result);
                     record.status = SkillExecutionStatus::Completed;
                     if let Some(prepared) = prepared {
@@ -2370,7 +2464,11 @@ impl AgentTool for ExecuteSkillStagesTool {
             if !rollback_applied.is_empty() {
                 journal.status = SkillExecutionStatus::RolledBack;
                 journal.updated_at = chrono::Utc::now().to_rfc3339();
-                if let Some(last) = journal.steps.last().and_then(|step| step.checkpoints.last()) {
+                if let Some(last) = journal
+                    .steps
+                    .last()
+                    .and_then(|step| step.checkpoints.last())
+                {
                     last_checkpoint_at = Some(last.recorded_at.clone());
                 }
                 self.base.store.save_execution_journal(&journal)?;

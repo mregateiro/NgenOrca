@@ -8,8 +8,8 @@ use crate::auth::{AuthMethod, CallerIdentity};
 use base64::Engine;
 use ngenorca_core::message::{Content, Message};
 use ngenorca_core::types::{ChannelId, ChannelKind, DeviceId, TrustLevel, UserId};
-use ngenorca_identity::resolver::{resolve_from_channel, resolve_from_device, IdentityAction};
 use ngenorca_identity::IdentityManager;
+use ngenorca_identity::resolver::{IdentityAction, resolve_from_channel, resolve_from_device};
 
 #[derive(Debug, Clone)]
 pub struct RuntimeIdentity {
@@ -67,51 +67,54 @@ pub fn resolve_web_identity_with_device(
 ) -> RuntimeIdentity {
     let auth_trust = auth_trust(&caller.auth_method);
 
-    if let Some(claim) = device_claim {
-        if let Ok(resolved) = resolve_from_device(
+    if let Some(claim) = device_claim
+        && let Ok(resolved) = resolve_from_device(
             identity,
             &claim.device_id,
             &claim.signature,
             &claim.message_bytes,
-        ) {
-            match resolved.action {
-                IdentityAction::Proceed | IdentityAction::ProceedReduced
-                    if resolved.user_id.is_some() =>
-                {
-                    let user_id = resolved.user_id;
-                    let linked_handles = if matches!(resolved.action, IdentityAction::Proceed) {
-                        user_id
-                            .as_ref()
-                            .map(|user_id| auto_link_web_handles(identity, user_id, caller))
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    return RuntimeIdentity {
-                        user_id,
-                        trust: resolved.trust.max(auth_trust),
-                        action: resolved.action,
-                        linked_handles,
-                    };
-                }
-                IdentityAction::Challenge | IdentityAction::Block => {
-                    return RuntimeIdentity {
-                        user_id: resolved.user_id,
-                        trust: resolved.trust,
-                        action: resolved.action,
-                        linked_handles: Vec::new(),
-                    };
-                }
-                IdentityAction::Proceed
-                | IdentityAction::ProceedReduced
-                | IdentityAction::RequirePairing => {}
+        )
+    {
+        match resolved.action {
+            IdentityAction::Proceed | IdentityAction::ProceedReduced
+                if resolved.user_id.is_some() =>
+            {
+                let user_id = resolved.user_id;
+                let linked_handles = if matches!(resolved.action, IdentityAction::Proceed) {
+                    user_id
+                        .as_ref()
+                        .map(|user_id| auto_link_web_handles(identity, user_id, caller))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                return RuntimeIdentity {
+                    user_id,
+                    trust: resolved.trust.max(auth_trust),
+                    action: resolved.action,
+                    linked_handles,
+                };
             }
+            IdentityAction::Challenge | IdentityAction::Block => {
+                return RuntimeIdentity {
+                    user_id: resolved.user_id,
+                    trust: resolved.trust,
+                    action: resolved.action,
+                    linked_handles: Vec::new(),
+                };
+            }
+            IdentityAction::Proceed
+            | IdentityAction::ProceedReduced
+            | IdentityAction::RequirePairing => {}
         }
     }
 
     for handle in web_handles(caller) {
         if let Ok(resolved) = resolve_from_channel(identity, &ChannelKind::WebChat, &handle)
-            && matches!(resolved.action, IdentityAction::Proceed | IdentityAction::ProceedReduced)
+            && matches!(
+                resolved.action,
+                IdentityAction::Proceed | IdentityAction::ProceedReduced
+            )
             && resolved.user_id.is_some()
         {
             return RuntimeIdentity {
@@ -124,7 +127,10 @@ pub fn resolve_web_identity_with_device(
     }
 
     RuntimeIdentity {
-        user_id: caller.username.as_ref().map(|username| UserId(username.clone())),
+        user_id: caller
+            .username
+            .as_ref()
+            .map(|username| UserId(username.clone())),
         trust: auth_trust,
         action: if caller.username.is_some() || caller.email.is_some() {
             IdentityAction::ProceedReduced
@@ -145,7 +151,9 @@ pub fn resolve_message_identity(identity: &IdentityManager, message: &Message) -
         )
     {
         match resolved.action {
-            IdentityAction::Proceed | IdentityAction::ProceedReduced if resolved.user_id.is_some() => {
+            IdentityAction::Proceed | IdentityAction::ProceedReduced
+                if resolved.user_id.is_some() =>
+            {
                 let user_id = resolved.user_id;
                 let linked_handles = if matches!(resolved.action, IdentityAction::Proceed) {
                     user_id
@@ -178,7 +186,10 @@ pub fn resolve_message_identity(identity: &IdentityManager, message: &Message) -
 
     for handle in channel_handles(message) {
         if let Ok(resolved) = resolve_from_channel(identity, &message.channel_kind, &handle)
-            && matches!(resolved.action, IdentityAction::Proceed | IdentityAction::ProceedReduced)
+            && matches!(
+                resolved.action,
+                IdentityAction::Proceed | IdentityAction::ProceedReduced
+            )
             && resolved.user_id.is_some()
         {
             return RuntimeIdentity {
@@ -245,7 +256,8 @@ pub fn describe_web_identity(
                     .into(),
             );
             suggested_actions.push(
-                "Retry after pairing to unlock full-trust identity continuity across channels.".into(),
+                "Retry after pairing to unlock full-trust identity continuity across channels."
+                    .into(),
             );
             if device_claim.is_some() {
                 "This device is not paired to a canonical user yet.".into()
@@ -254,12 +266,10 @@ pub fn describe_web_identity(
             }
         }
         IdentityAction::Challenge => {
-            suggested_actions.push(
-                "Retry with a fresh signed payload from the paired device.".into(),
-            );
-            suggested_actions.push(
-                "If the device was rotated or reset, re-pair it before retrying.".into(),
-            );
+            suggested_actions
+                .push("Retry with a fresh signed payload from the paired device.".into());
+            suggested_actions
+                .push("If the device was rotated or reset, re-pair it before retrying.".into());
             "A known device claim was presented, but verification failed for this request.".into()
         }
         IdentityAction::Block => {
@@ -275,7 +285,10 @@ pub fn describe_web_identity(
         trust: trust_label(&resolved.trust).into(),
         user_id: resolved.user_id.as_ref().map(|value| value.0.clone()),
         requires_pairing: matches!(resolved.action, IdentityAction::RequirePairing),
-        requires_challenge: matches!(resolved.action, IdentityAction::Challenge | IdentityAction::Block),
+        requires_challenge: matches!(
+            resolved.action,
+            IdentityAction::Challenge | IdentityAction::Block
+        ),
         reason,
         suggested_actions,
         matched_handles,
@@ -314,7 +327,8 @@ pub fn describe_message_identity(
             suggested_actions.push(
                 "Pair a device for higher-trust verification when the channel supports it.".into(),
             );
-            "No linked channel handle or paired device was available for this inbound message.".into()
+            "No linked channel handle or paired device was available for this inbound message."
+                .into()
         }
         IdentityAction::Challenge => {
             suggested_actions.push(
@@ -335,7 +349,10 @@ pub fn describe_message_identity(
         trust: trust_label(&resolved.trust).into(),
         user_id: resolved.user_id.as_ref().map(|value| value.0.clone()),
         requires_pairing: matches!(resolved.action, IdentityAction::RequirePairing),
-        requires_challenge: matches!(resolved.action, IdentityAction::Challenge | IdentityAction::Block),
+        requires_challenge: matches!(
+            resolved.action,
+            IdentityAction::Challenge | IdentityAction::Block
+        ),
         reason,
         suggested_actions,
         matched_handles,
@@ -373,11 +390,19 @@ fn web_handles(caller: &CallerIdentity) -> Vec<String> {
 pub fn authenticated_web_handles(caller: &CallerIdentity) -> Vec<String> {
     let mut handles = Vec::new();
 
-    if let Some(username) = caller.username.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(username) = caller
+        .username
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         push_unique(&mut handles, username.trim().to_string());
     }
 
-    if let Some(email) = caller.email.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(email) = caller
+        .email
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         push_unique(&mut handles, email.trim().to_string());
     }
 
@@ -426,7 +451,10 @@ fn channel_handles(message: &Message) -> Vec<String> {
                 push_channel_handle_candidates(&mut handles, &message.channel_kind, &name);
             }
         }
-        ChannelKind::WebChat | ChannelKind::IRC | ChannelKind::IMessage | ChannelKind::Custom(_) => {}
+        ChannelKind::WebChat
+        | ChannelKind::IRC
+        | ChannelKind::IMessage
+        | ChannelKind::Custom(_) => {}
     }
 
     if let Some(user_id) = &message.user_id {
@@ -453,7 +481,10 @@ fn message_device_claim(message: &Message) -> Option<DeviceIdentityClaim> {
 fn message_payload_bytes(message: &Message) -> Vec<u8> {
     match &message.content {
         Content::Text(text) => text.as_bytes().to_vec(),
-        Content::Image { caption: Some(caption), .. } => caption.as_bytes().to_vec(),
+        Content::Image {
+            caption: Some(caption),
+            ..
+        } => caption.as_bytes().to_vec(),
         Content::Audio {
             transcript: Some(transcript),
             ..
@@ -471,9 +502,21 @@ fn decode_binary_claim(value: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(trimmed)
         .ok()
-        .or_else(|| base64::engine::general_purpose::STANDARD_NO_PAD.decode(trimmed).ok())
-        .or_else(|| base64::engine::general_purpose::URL_SAFE.decode(trimmed).ok())
-        .or_else(|| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(trimmed).ok())
+        .or_else(|| {
+            base64::engine::general_purpose::STANDARD_NO_PAD
+                .decode(trimmed)
+                .ok()
+        })
+        .or_else(|| {
+            base64::engine::general_purpose::URL_SAFE
+                .decode(trimmed)
+                .ok()
+        })
+        .or_else(|| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(trimmed)
+                .ok()
+        })
 }
 
 fn push_web_handle_candidates(values: &mut Vec<String>, raw: &str) {
@@ -505,7 +548,11 @@ fn push_channel_handle_candidates(values: &mut Vec<String>, channel_kind: &Chann
         ChannelKind::WebChat => {
             push_web_handle_candidates(values, unprefixed);
         }
-        ChannelKind::Slack | ChannelKind::Teams | ChannelKind::IRC | ChannelKind::IMessage | ChannelKind::Custom(_) => {}
+        ChannelKind::Slack
+        | ChannelKind::Teams
+        | ChannelKind::IRC
+        | ChannelKind::IMessage
+        | ChannelKind::Custom(_) => {}
     }
 }
 
@@ -561,7 +608,13 @@ fn push_matrix_candidates(values: &mut Vec<String>, raw: &str) {
 fn strip_channel_prefix(raw: &str) -> &str {
     let trimmed = raw.trim();
     match trimmed.split_once(':') {
-        Some((prefix, tail)) if prefix.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') => tail,
+        Some((prefix, tail))
+            if prefix
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') =>
+        {
+            tail
+        }
         _ => trimmed,
     }
 }
@@ -647,6 +700,25 @@ fn try_link_channel_handle(
             .map(|_| true)
             .unwrap_or(false),
         Err(_) => false,
+    }
+}
+
+fn identity_action_label(action: &IdentityAction) -> &'static str {
+    match action {
+        IdentityAction::Proceed => "proceed",
+        IdentityAction::ProceedReduced => "proceed_reduced",
+        IdentityAction::RequirePairing => "require_pairing",
+        IdentityAction::Challenge => "challenge",
+        IdentityAction::Block => "block",
+    }
+}
+
+fn trust_label(trust: &TrustLevel) -> &'static str {
+    match trust {
+        TrustLevel::Unknown => "unknown",
+        TrustLevel::Channel => "channel",
+        TrustLevel::Certificate => "certificate",
+        TrustLevel::Hardware => "hardware",
     }
 }
 
@@ -773,7 +845,8 @@ mod tests {
         let rng = ring::rand::SystemRandom::new();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
         let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-        let public_key = base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+        let public_key =
+            base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
 
         manager
             .pair_device(
@@ -797,7 +870,8 @@ mod tests {
     fn resolve_web_identity_prefers_valid_device_signature() {
         let (manager, key_pair, canonical) = setup_with_ed25519();
         let message = "signed hello";
-        let signature = base64::engine::general_purpose::STANDARD.encode(key_pair.sign(message.as_bytes()).as_ref());
+        let signature = base64::engine::general_purpose::STANDARD
+            .encode(key_pair.sign(message.as_bytes()).as_ref());
         let caller = CallerIdentity {
             username: Some("fallback-user".into()),
             email: None,
@@ -898,10 +972,7 @@ mod tests {
         use base64::Engine;
 
         let (manager, key_pair, canonical) = setup_with_ed25519();
-        let mut message = sample_message(
-            ChannelKind::Telegram,
-            Some(UserId("telegram:42".into())),
-        );
+        let mut message = sample_message(ChannelKind::Telegram, Some(UserId("telegram:42".into())));
         message.metadata = serde_json::json!({
             "device_id": "dev-webchat",
             "device_signature": base64::engine::general_purpose::STANDARD.encode(key_pair.sign(b"hello").as_ref()),
@@ -949,7 +1020,11 @@ mod tests {
 
         let discord_user = UserId("discord-owner".into());
         manager
-            .register_user(discord_user.clone(), "Discord Owner".into(), UserRole::Family)
+            .register_user(
+                discord_user.clone(),
+                "Discord Owner".into(),
+                UserRole::Family,
+            )
             .unwrap();
         manager
             .link_channel(
@@ -966,24 +1041,5 @@ mod tests {
         });
         let discord_resolved = resolve_message_identity(&manager, &discord_message);
         assert_eq!(discord_resolved.user_id, Some(discord_user));
-    }
-}
-
-fn identity_action_label(action: &IdentityAction) -> &'static str {
-    match action {
-        IdentityAction::Proceed => "proceed",
-        IdentityAction::ProceedReduced => "proceed_reduced",
-        IdentityAction::RequirePairing => "require_pairing",
-        IdentityAction::Challenge => "challenge",
-        IdentityAction::Block => "block",
-    }
-}
-
-fn trust_label(trust: &TrustLevel) -> &'static str {
-    match trust {
-        TrustLevel::Unknown => "unknown",
-        TrustLevel::Channel => "channel",
-        TrustLevel::Certificate => "certificate",
-        TrustLevel::Hardware => "hardware",
     }
 }

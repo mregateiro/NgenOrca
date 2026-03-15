@@ -472,14 +472,22 @@ mod tests {
 
     #[test]
     fn channel_handle_candidates_cover_common_alias_forms() {
-        assert!(channel_handle_candidates(&ChannelKind::WhatsApp, "whatsapp:+1 (555) 010-0200")
-            .contains(&"15550100200".to_string()));
-        assert!(channel_handle_candidates(&ChannelKind::Slack, "<@U123ABC>")
-            .contains(&"U123ABC".to_string()));
-        assert!(channel_handle_candidates(&ChannelKind::Discord, "<@!998877>")
-            .contains(&"998877".to_string()));
-        assert!(channel_handle_candidates(&ChannelKind::Teams, "8:orgid:alice@example.com")
-            .contains(&"alice".to_string()));
+        assert!(
+            channel_handle_candidates(&ChannelKind::WhatsApp, "whatsapp:+1 (555) 010-0200")
+                .contains(&"15550100200".to_string())
+        );
+        assert!(
+            channel_handle_candidates(&ChannelKind::Slack, "<@U123ABC>")
+                .contains(&"U123ABC".to_string())
+        );
+        assert!(
+            channel_handle_candidates(&ChannelKind::Discord, "<@!998877>")
+                .contains(&"998877".to_string())
+        );
+        assert!(
+            channel_handle_candidates(&ChannelKind::Teams, "8:orgid:alice@example.com")
+                .contains(&"alice".to_string())
+        );
     }
 
     #[test]

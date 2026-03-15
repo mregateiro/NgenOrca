@@ -103,9 +103,12 @@ impl MemoryManager {
         let semantic_facts = self.semantic.retrieve_for_user(user_id, semantic_budget)?;
 
         // Tier 2: Episodic memory — relevant past conversations.
-        let episodic_results = self
-            .episodic
-            .search(user_id, current_query, profile.episodic_limit, episodic_budget)?;
+        let episodic_results = self.episodic.search(
+            user_id,
+            current_query,
+            profile.episodic_limit,
+            episodic_budget,
+        )?;
 
         // Tier 1: Working memory — current session context.
         let working_messages = self.working.get_session(session_id);

@@ -353,7 +353,13 @@ fn extract_domain_tags(text: &str) -> Vec<String> {
         ),
         (
             "memory",
-            &["memory", "context", "episodic", "semantic", "working memory"][..],
+            &[
+                "memory",
+                "context",
+                "episodic",
+                "semantic",
+                "working memory",
+            ][..],
         ),
     ];
 

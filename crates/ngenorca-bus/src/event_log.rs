@@ -1,9 +1,9 @@
 //! SQLite WAL-backed durable event log.
 
+use crate::EventQuery;
 use chrono::{DateTime, Utc};
 use ngenorca_core::event::Event;
 use ngenorca_core::{Error, EventId, Result, SessionId};
-use crate::EventQuery;
 use rusqlite::{Connection, params};
 use std::sync::Mutex;
 use tracing::debug;
@@ -173,7 +173,10 @@ impl EventLog {
             .prepare(&sql)
             .map_err(|e| Error::Database(e.to_string()))?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(params_vec.iter()), decode_event_row)
+            .query_map(
+                rusqlite::params_from_iter(params_vec.iter()),
+                decode_event_row,
+            )
             .map_err(|e| Error::Database(e.to_string()))?;
 
         collect_events(rows)
@@ -283,8 +286,7 @@ where
             session_id: session_id
                 .map(|s| SessionId(uuid::Uuid::parse_str(&s).unwrap_or_default())),
             user_id: user_id.map(ngenorca_core::UserId),
-            payload: serde_json::from_str(&payload)
-                .map_err(|e| Error::Database(e.to_string()))?,
+            payload: serde_json::from_str(&payload).map_err(|e| Error::Database(e.to_string()))?,
         };
         events.push(event);
     }

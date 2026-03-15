@@ -12,6 +12,11 @@ use ngenorca_bus::EventBus;
 use ngenorca_config::NgenOrcaConfig;
 use ngenorca_core::event::{Event, EventPayload};
 use ngenorca_core::identity::{AttestationType, UserRole};
+use ngenorca_core::orchestration::{
+    ClassificationMethod, CorrectionRecord, OrchestrationRecord, QualityMethod, QualityVerdict,
+    RoutingDecision, SubAgentId, SynthesisRecord, TaskClassification, TaskComplexity, TaskIntent,
+};
+use ngenorca_core::types::{DeviceId, EventId, SessionId, TrustLevel, UserId};
 use ngenorca_gateway::auth;
 use ngenorca_gateway::metrics::Metrics;
 use ngenorca_gateway::orchestration::LearnedRouter;
@@ -23,8 +28,6 @@ use ngenorca_gateway::sessions::SessionManager;
 use ngenorca_gateway::state::{AppState, AppStateParams};
 use ngenorca_identity::IdentityManager;
 use ngenorca_memory::MemoryManager;
-use ngenorca_core::orchestration::{ClassificationMethod, CorrectionRecord, OrchestrationRecord, QualityMethod, QualityVerdict, RoutingDecision, SubAgentId, SynthesisRecord, TaskClassification, TaskComplexity, TaskIntent};
-use ngenorca_core::types::{DeviceId, EventId, SessionId, TrustLevel, UserId};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tower::ServiceExt;
@@ -89,7 +92,11 @@ fn build_app(state: AppState) -> axum::Router {
         .layer(CorsLayer::permissive())
 }
 
-fn learned_record(intent: TaskIntent, target: &str, domain_tags: Vec<String>) -> OrchestrationRecord {
+fn learned_record(
+    intent: TaskIntent,
+    target: &str,
+    domain_tags: Vec<String>,
+) -> OrchestrationRecord {
     let classification = TaskClassification {
         intent,
         complexity: TaskComplexity::Simple,
@@ -268,11 +275,13 @@ async fn whoami_reports_runtime_identity_guidance() {
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["identity"]["action"], "require_pairing");
     assert_eq!(json["identity"]["requires_pairing"], true);
-    assert!(json["identity"]["suggested_actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value.as_str().unwrap().contains("Pair a device")));
+    assert!(
+        json["identity"]["suggested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().contains("Pair a device"))
+    );
 }
 
 #[tokio::test]
@@ -317,15 +326,22 @@ async fn chat_reports_structured_identity_challenge_details() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(json["error"].as_str().unwrap().contains("device verification failed"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("device verification failed")
+    );
     assert_eq!(json["identity"]["action"], "challenge");
     assert_eq!(json["identity"]["requires_challenge"], true);
     assert_eq!(json["identity"]["device_id"], "dev-webchat");
-    assert!(json["identity"]["suggested_actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value.as_str().unwrap().contains("fresh signed payload")));
+    assert!(
+        json["identity"]["suggested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().contains("fresh signed payload"))
+    );
 }
 
 #[tokio::test]
@@ -504,7 +520,8 @@ async fn identity_challenge_endpoints_verify_known_device_and_rebind_session() {
     let nonce = base64::engine::general_purpose::STANDARD
         .decode(start_json["nonce_b64"].as_str().unwrap())
         .unwrap();
-    let signature = base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
+    let signature =
+        base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
 
     let verify_req = Request::builder()
         .uri("/api/v1/identity/challenge/verify")
@@ -528,7 +545,10 @@ async fn identity_challenge_endpoints_verify_known_device_and_rebind_session() {
     assert_eq!(verify_json["verified"], true);
     assert_eq!(verify_json["user_id"], canonical.0);
     assert_eq!(verify_json["session_id"], session_id.to_string());
-    assert_eq!(state.sessions().get(&session_id).unwrap().user_id, Some(canonical));
+    assert_eq!(
+        state.sessions().get(&session_id).unwrap().user_id,
+        Some(canonical)
+    );
 }
 
 #[tokio::test]
@@ -595,7 +615,8 @@ async fn identity_challenge_verify_reuses_existing_canonical_session_and_links_w
     let nonce = base64::engine::general_purpose::STANDARD
         .decode(start_json["nonce_b64"].as_str().unwrap())
         .unwrap();
-    let signature = base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
+    let signature =
+        base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
 
     let verify_req = Request::builder()
         .uri("/api/v1/identity/challenge/verify")
@@ -789,11 +810,7 @@ async fn orchestration_endpoint_reports_learned_route_diagnostics() {
     let state = test_state().await;
     state
         .learned_router()
-        .ingest(&learned_record(
-            TaskIntent::Coding,
-            "primary",
-            vec![],
-        ))
+        .ingest(&learned_record(TaskIntent::Coding, "primary", vec![]))
         .unwrap();
     let mut escalated = learned_record(TaskIntent::Analysis, "deep-thinker", vec!["logs".into()]);
     escalated.quality = QualityVerdict::Escalate {
@@ -863,64 +880,113 @@ async fn orchestration_endpoint_reports_learned_route_diagnostics() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["learned_routes"]["count"], 1);
-    assert_eq!(json["learned_routes"]["rules"][0]["rule"]["target_agent"], "primary");
+    assert_eq!(
+        json["learned_routes"]["rules"][0]["rule"]["target_agent"],
+        "primary"
+    );
     assert!(json["learned_routes"]["rules"][0]["effective_confidence"].is_number());
     assert!(json["learned_routes"]["rules"][0]["adaptive_decay_multiplier"].is_number());
     assert!(json["learned_routes"]["rules"][0]["outcome_trend_adjustment"].is_number());
     assert!(json["learned_routes"]["rules"][0]["accept_rate"].is_number());
     assert!(json["learned_routes"]["rules"][0]["stability_score"].is_number());
     assert_eq!(json["learned_routes"]["history"]["total_rules"], 1);
-    assert!(json["learned_routes"]["history"]["agents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "primary"));
-    assert_eq!(json["execution_diagnostics"]["response_metadata_exposed"], true);
-    assert_eq!(json["execution_diagnostics"]["tracks_structured_planning"], true);
-    assert_eq!(json["execution_diagnostics"]["tracks_tool_verification"], true);
-    assert_eq!(json["execution_diagnostics"]["tracks_branch_contradiction_analysis"], true);
-    assert_eq!(json["execution_diagnostics"]["tracks_learned_route_trends"], true);
-    assert!(json["execution_diagnostics"]["worker_stage_reporting"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "parallel-support"));
-    assert!(json["execution_diagnostics"]["worker_stage_reporting"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "escalation"));
+    assert!(
+        json["learned_routes"]["history"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "primary")
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["response_metadata_exposed"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_structured_planning"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_tool_verification"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_branch_contradiction_analysis"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_learned_route_trends"],
+        true
+    );
+    assert!(
+        json["execution_diagnostics"]["worker_stage_reporting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "parallel-support")
+    );
+    assert!(
+        json["execution_diagnostics"]["worker_stage_reporting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "escalation")
+    );
     assert_eq!(json["recent_history"]["orchestration_count"], 2);
     assert_eq!(json["recent_history"]["tool_event_count"], 1);
     assert!(json["recent_history"]["escalation_rate"].as_f64().unwrap() > 0.0);
-    assert!(json["recent_history"]["tool_failure_rate"].as_f64().unwrap() > 0.0);
-    assert!(json["recent_history"]["grounded_response_rate"].as_f64().unwrap() > 0.0);
-    assert!(json["recent_history"]["correction_attempt_rate"].as_f64().unwrap() > 0.0);
-    assert!(json["recent_history"]["intent_mix"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "Coding"));
-    assert!(json["recent_history"]["user_mix"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "ops"));
-    assert!(json["recent_history"]["channel_mix"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "web"));
-    assert!(json["recent_history"]["tool_mix"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "run_command"));
-    assert!(json["recent_history"]["recent_failures"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "run_command:execution"));
+    assert!(
+        json["recent_history"]["tool_failure_rate"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        json["recent_history"]["grounded_response_rate"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        json["recent_history"]["correction_attempt_rate"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        json["recent_history"]["intent_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Coding")
+    );
+    assert!(
+        json["recent_history"]["user_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "ops")
+    );
+    assert!(
+        json["recent_history"]["channel_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "web")
+    );
+    assert!(
+        json["recent_history"]["tool_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "run_command")
+    );
+    assert!(
+        json["recent_history"]["recent_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "run_command:execution")
+    );
 }
 
 #[tokio::test]
@@ -987,11 +1053,13 @@ async fn learned_routes_endpoint_supports_filtering_and_clear() {
     assert_eq!(json["rules"][0]["rule"]["intent"], "Coding");
     assert!(json["rules"][0]["adaptive_decay_multiplier"].is_number());
     assert!(json["rules"][0]["accept_rate"].is_number());
-    assert!(json["history"]["intents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "Coding"));
+    assert!(
+        json["history"]["intents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Coding")
+    );
 
     let delete_req = Request::builder()
         .method("DELETE")
@@ -1014,11 +1082,13 @@ async fn learned_routes_endpoint_supports_filtering_and_clear() {
     let verify_json: Value = serde_json::from_slice(&verify_body).unwrap();
     assert_eq!(verify_json["count"], 1);
     assert_eq!(verify_json["rules"][0]["rule"]["intent"], "Analysis");
-    assert!(verify_json["history"]["intents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["label"] == "Analysis"));
+    assert!(
+        verify_json["history"]["intents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Analysis")
+    );
 }
 
 #[tokio::test]
@@ -1073,8 +1143,14 @@ async fn status_reports_sandbox_policy_details() {
     assert_eq!(json["sandbox"]["policy"]["memory_limit_mb"], 256);
     assert_eq!(json["sandbox"]["policy"]["cpu_limit_seconds"], 12);
     assert_eq!(json["sandbox"]["policy"]["wall_time_limit_seconds"], 20);
-    assert_eq!(json["sandbox"]["policy"]["additional_read_paths"][0], "/tmp/ngenorca-read");
-    assert_eq!(json["sandbox"]["policy"]["additional_write_paths"][0], "/tmp/ngenorca-write");
+    assert_eq!(
+        json["sandbox"]["policy"]["additional_read_paths"][0],
+        "/tmp/ngenorca-read"
+    );
+    assert_eq!(
+        json["sandbox"]["policy"]["additional_write_paths"][0],
+        "/tmp/ngenorca-write"
+    );
     assert!(json["sandbox"]["requested_backend"].is_string());
     assert!(json["sandbox"]["audit"]["backend"].is_string());
     assert!(json["events"]["retention_days"].is_u64());
@@ -1101,11 +1177,13 @@ async fn event_history_endpoint_supports_filtered_failures() {
     assert_eq!(json["events"][0]["event_kind"], "tool_execution");
     assert_eq!(json["events"][0]["summary"]["tool_name"], "run_command");
     assert_eq!(json["history"]["tool_event_count"], 1);
-    assert!(json["history"]["recent_failures"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "run_command:execution"));
+    assert!(
+        json["history"]["recent_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "run_command:execution")
+    );
 }
 
 #[tokio::test]
@@ -1126,16 +1204,20 @@ async fn correction_timeline_endpoint_groups_longer_horizon_activity() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert!(json["bucket_count"].as_u64().unwrap() >= 1);
-    assert!(json["buckets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["correction_attempts"].as_u64().unwrap() > 0));
-    assert!(json["buckets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|bucket| bucket["tool_failures"].as_u64().unwrap() > 0));
+    assert!(
+        json["buckets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["correction_attempts"].as_u64().unwrap() > 0)
+    );
+    assert!(
+        json["buckets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["tool_failures"].as_u64().unwrap() > 0)
+    );
 }
 
 // ─── Request-ID propagation ─────────────────────────────────────────

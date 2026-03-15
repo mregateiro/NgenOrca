@@ -138,7 +138,10 @@ impl SlackAdapter {
     }
 
     /// Convert a Slack message event into an NgenOrca Message.
-    pub(crate) fn slack_event_to_message(event: &SlackMessageEvent, channel_id: &str) -> Option<Message> {
+    pub(crate) fn slack_event_to_message(
+        event: &SlackMessageEvent,
+        channel_id: &str,
+    ) -> Option<Message> {
         // Skip bot messages to avoid echoes.
         if event.bot_id.is_some() || event.subtype.is_some() {
             return None;
