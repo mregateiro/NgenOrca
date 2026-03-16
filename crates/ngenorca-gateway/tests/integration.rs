@@ -1794,8 +1794,25 @@ async fn start_test_server(
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Give the server a moment to accept connections.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait until the listener is accepting connections to avoid CI timing flakes.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => {
+                drop(stream);
+                break;
+            }
+            _ if tokio::time::Instant::now() >= deadline => {
+                panic!("test server did not become ready in time");
+            }
+            _ => tokio::time::sleep(std::time::Duration::from_millis(25)).await,
+        }
+    }
 
     (addr, state, handle)
 }

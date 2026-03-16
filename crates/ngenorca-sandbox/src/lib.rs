@@ -1495,7 +1495,7 @@ mod tests {
         let result = sandboxed_exec("ping", &["-n", "30", "127.0.0.1"], &policy).await;
 
         #[cfg(not(windows))]
-        let result = sandboxed_exec("sh", &["-c", "sleep 5"], &policy).await;
+        let result = sandboxed_exec("sh", &["-c", "while :; do :; done"], &policy).await;
 
         assert!(result.is_ok());
         let output = result.unwrap();
