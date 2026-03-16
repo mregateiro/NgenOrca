@@ -364,9 +364,13 @@ fn run_onboard_wizard(config_path: Option<&str>) -> anyhow::Result<()> {
 
     // ── Step 1: Model provider ──────────────────────────────────
     let provider_choices = &[
-        "ollama  — local models (recommended for privacy)",
-        "anthropic — Claude (requires API key)",
-        "openai  — GPT (requires API key)",
+        "ollama      — local models (recommended for privacy)",
+        "anthropic   — Claude (requires API key)",
+        "openai      — GPT-4o / GPT-4 (requires API key)",
+        "openrouter  — 200+ models via one API key",
+        "gemini      — Google Gemini (requires API key)",
+        "groq        — fast inference (requires API key)",
+        "mistral     — Mistral AI (requires API key)",
     ];
     let provider_idx = Select::new()
         .with_prompt("1. Choose your model provider")
@@ -375,10 +379,14 @@ fn run_onboard_wizard(config_path: Option<&str>) -> anyhow::Result<()> {
         .interact()?;
 
     let (provider_name, default_model, needs_key) = match provider_idx {
-        0 => ("ollama", "ollama/llama3.1:8b", false),
-        1 => ("anthropic", "anthropic/claude-sonnet-4-20250514", true),
-        2 => ("openai", "openai/gpt-4o-mini", true),
-        _ => ("ollama", "ollama/llama3.1:8b", false),
+        0 => ("ollama",     "ollama/llama3.1:8b",                         false),
+        1 => ("anthropic",  "anthropic/claude-sonnet-4-20250514",         true),
+        2 => ("openai",     "openai/gpt-4o-mini",                         true),
+        3 => ("openrouter", "openrouter/meta-llama/llama-3.3-70b-instruct", true),
+        4 => ("gemini",     "gemini/gemini-2.0-flash",                    true),
+        5 => ("groq",       "groq/llama-3.3-70b-versatile",               true),
+        6 => ("mistral",    "mistral/mistral-large-latest",               true),
+        _ => ("ollama",     "ollama/llama3.1:8b",                         false),
     };
 
     let model: String = Input::new()
@@ -486,6 +494,34 @@ fn run_onboard_wizard(config_path: Option<&str>) -> anyhow::Result<()> {
         }
         "openai" => {
             toml.push_str("[agent.providers.openai]\n");
+            if let Some(ref key) = api_key {
+                toml.push_str(&format!("api_key = \"{key}\"\n"));
+            }
+            toml.push('\n');
+        }
+        "openrouter" => {
+            toml.push_str("[agent.providers.openrouter]\n");
+            if let Some(ref key) = api_key {
+                toml.push_str(&format!("api_key = \"{key}\"\n"));
+            }
+            toml.push('\n');
+        }
+        "gemini" => {
+            toml.push_str("[agent.providers.gemini]\n");
+            if let Some(ref key) = api_key {
+                toml.push_str(&format!("api_key = \"{key}\"\n"));
+            }
+            toml.push('\n');
+        }
+        "groq" => {
+            toml.push_str("[agent.providers.groq]\n");
+            if let Some(ref key) = api_key {
+                toml.push_str(&format!("api_key = \"{key}\"\n"));
+            }
+            toml.push('\n');
+        }
+        "mistral" => {
+            toml.push_str("[agent.providers.mistral]\n");
             if let Some(ref key) = api_key {
                 toml.push_str(&format!("api_key = \"{key}\"\n"));
             }
