@@ -16,7 +16,7 @@ use crate::transport::Transport;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 /// Events emitted by the client.
@@ -58,7 +58,131 @@ pub struct WhatsAppClient {
     signal_keys: Arc<Mutex<Option<SignalKeys>>>,
     shutdown: Arc<Notify>,
     connected: Arc<std::sync::atomic::AtomicBool>,
+    /// Pending IQ request waiters keyed by IQ `id` attribute.
+    iq_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<WaNode>>>>,
 }
+
+// ─── Pre-Key Bundle ─────────────────────────────────────────────
+
+/// A pre-key bundle fetched from the WhatsApp server for a remote contact.
+///
+/// Carries the key material required to perform an X3DH session bootstrap
+/// when sending the first Signal-encrypted message to a new contact.
+#[derive(Debug)]
+struct PreKeyBundle {
+    /// Remote device's long-term identity public key (32 bytes, Curve25519).
+    identity_pub: Vec<u8>,
+    /// Signed pre-key ID (used for server-side rotation tracking).
+    #[allow(dead_code)]
+    signed_prekey_id: u32,
+    /// Signed pre-key public key (32 bytes, Curve25519).
+    signed_prekey_pub: Vec<u8>,
+    /// Signature over the signed pre-key (for optional verification).
+    #[allow(dead_code)]
+    signed_prekey_sig: Vec<u8>,
+    /// One-time pre-key ID (optional).
+    #[allow(dead_code)]
+    one_time_prekey_id: Option<u32>,
+    /// One-time pre-key public key (optional, 32 bytes, Curve25519).
+    one_time_prekey_pub: Option<Vec<u8>>,
+}
+
+/// Walk a `WaNode` tree depth-first and return the first `<user>` node found.
+fn find_user_node(node: &WaNode) -> Option<&WaNode> {
+    if node.tag == "user" {
+        return Some(node);
+    }
+    if let WaNodeContent::List(ref children) = node.content {
+        for child in children {
+            if let Some(found) = find_user_node(child) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Parse a pre-key bundle from an IQ result node.
+///
+/// Expected shape (WhatsApp multi-device protocol):
+/// ```xml
+/// <iq type="result" id="...">
+///   <list>
+///     <user jid="...@s.whatsapp.net">
+///       <identity><!-- 32-byte identity pub --></identity>
+///       <skey id="1">
+///         <value><!-- 32-byte signed-prekey pub --></value>
+///         <signature><!-- 64-byte XEdDSA sig --></signature>
+///       </skey>
+///       <key id="1">                <!-- optional one-time pre-key -->
+///         <value><!-- 32-byte OPK pub --></value>
+///       </key>
+///     </user>
+///   </list>
+/// </iq>
+/// ```
+fn parse_prekey_bundle_response(iq: &WaNode) -> crate::Result<PreKeyBundle> {
+    let err = |msg: &str| crate::Error::Signal(msg.to_string());
+
+    if iq.attr("type") == Some("error") {
+        let code = iq.attr("code").unwrap_or("unknown");
+        return Err(crate::Error::Signal(format!(
+            "server returned IQ error (code={code}) for pre-key bundle request"
+        )));
+    }
+
+    let user_node =
+        find_user_node(iq).ok_or_else(|| err("no <user> node in pre-key bundle response"))?;
+
+    // <identity>
+    let identity_pub = user_node
+        .child("identity")
+        .and_then(|n| n.content_bytes())
+        .ok_or_else(|| err("missing <identity> in pre-key bundle"))?
+        .to_vec();
+
+    // <skey id="…">
+    let skey_node = user_node
+        .child("skey")
+        .ok_or_else(|| err("missing <skey> in pre-key bundle"))?;
+    let signed_prekey_id: u32 = skey_node
+        .attr("id")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let signed_prekey_pub = skey_node
+        .child("value")
+        .and_then(|n| n.content_bytes())
+        .ok_or_else(|| err("missing <skey><value> in pre-key bundle"))?
+        .to_vec();
+    let signed_prekey_sig = skey_node
+        .child("signature")
+        .and_then(|n| n.content_bytes())
+        .unwrap_or(&[])
+        .to_vec();
+
+    // <key id="…">  (optional one-time pre-key)
+    let (one_time_prekey_id, one_time_prekey_pub) = if let Some(key_node) = user_node.child("key") {
+        let id = key_node.attr("id").and_then(|s| s.parse().ok());
+        let pub_key = key_node
+            .child("value")
+            .and_then(|n| n.content_bytes())
+            .map(|b| b.to_vec());
+        (id, pub_key)
+    } else {
+        (None, None)
+    };
+
+    Ok(PreKeyBundle {
+        identity_pub,
+        signed_prekey_id,
+        signed_prekey_pub,
+        signed_prekey_sig,
+        one_time_prekey_id,
+        one_time_prekey_pub,
+    })
+}
+
+// ─── Client impl ────────────────────────────────────────────────
 
 impl WhatsAppClient {
     /// Create a new client.  Does NOT connect — call `connect()` next.
@@ -76,6 +200,7 @@ impl WhatsAppClient {
             signal_keys: Arc::new(Mutex::new(None)),
             shutdown: Arc::new(Notify::new()),
             connected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            iq_waiters: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -240,6 +365,7 @@ impl WhatsAppClient {
         let shutdown = self.shutdown.clone();
         let connected = self.connected.clone();
         let store = self.store.clone();
+        let iq_waiters = self.iq_waiters.clone();
 
         tokio::spawn(async move {
             loop {
@@ -254,7 +380,7 @@ impl WhatsAppClient {
                     } => {
                         match result {
                             Ok(node) => {
-                                Self::handle_incoming_node(&event_tx, &store, &node).await;
+                                Self::handle_incoming_node(&event_tx, &store, &iq_waiters, &node).await;
                             }
                             Err(e) => {
                                 error!("WebSocket receive error: {e}");
@@ -275,6 +401,7 @@ impl WhatsAppClient {
     async fn handle_incoming_node(
         event_tx: &mpsc::UnboundedSender<WhatsAppEvent>,
         store: &FileStore,
+        iq_waiters: &Arc<Mutex<HashMap<String, oneshot::Sender<WaNode>>>>,
         node: &WaNode,
     ) {
         match node.tag.as_str() {
@@ -284,8 +411,25 @@ impl WhatsAppClient {
             "receipt" | "ack" | "notification" => {
                 debug!(tag = %node.tag, "Received control node");
             }
-            "ib" | "iq" => {
-                debug!(tag = %node.tag, "Received IQ node");
+            "ib" => {
+                debug!(tag = %node.tag, "Received IB node");
+            }
+            "iq" => {
+                // Route IQ result/error responses to any registered waiter.
+                let node_type = node.attr("type").unwrap_or("");
+                if (node_type == "result" || node_type == "error")
+                    && let Some(id) = node.attr("id")
+                {
+                    let waiter = {
+                        let mut waiters = iq_waiters.lock().await;
+                        waiters.remove(id)
+                    };
+                    if let Some(tx) = waiter {
+                        let _ = tx.send(node.clone());
+                        return;
+                    }
+                }
+                debug!(tag = %node.tag, "Received unmatched IQ node");
             }
             "stream:error" => {
                 warn!("Stream error from server");
@@ -427,6 +571,102 @@ impl WhatsAppClient {
         None
     }
 
+    // ─── X3DH session bootstrap ─────────────────────────────────
+
+    /// Fetch the pre-key bundle for `jid` via an `<iq type="get" xmlns="encrypt">` exchange.
+    ///
+    /// Registers a one-shot waiter in `iq_waiters` before sending so the
+    /// background receive loop can route the server's response straight here
+    /// without racing against normal message traffic.
+    async fn fetch_prekey_bundle(
+        &self,
+        transport: &Arc<Mutex<Transport>>,
+        jid: &str,
+    ) -> crate::Result<PreKeyBundle> {
+        let req_id = {
+            let raw = uuid::Uuid::new_v4().to_string().replace('-', "");
+            raw[..20].to_string()
+        };
+
+        // Build the IQ "get" stanza.
+        let mut iq_attrs = HashMap::new();
+        iq_attrs.insert("id".into(), req_id.clone());
+        iq_attrs.insert("xmlns".into(), "encrypt".into());
+        iq_attrs.insert("type".into(), "get".into());
+        iq_attrs.insert("to".into(), "s.whatsapp.net".into());
+
+        let mut key_attrs = HashMap::new();
+        key_attrs.insert("jid".into(), jid.to_string());
+
+        let iq_node = WaNode {
+            tag: "iq".into(),
+            attrs: iq_attrs,
+            content: WaNodeContent::List(vec![WaNode {
+                tag: "key".into(),
+                attrs: key_attrs,
+                content: WaNodeContent::None,
+            }]),
+        };
+
+        // Register the waiter *before* sending to avoid a response race.
+        let (tx, rx) = oneshot::channel::<WaNode>();
+        {
+            let mut waiters = self.iq_waiters.lock().await;
+            waiters.insert(req_id.clone(), tx);
+        }
+
+        // Send the IQ.
+        {
+            let t = transport.lock().await;
+            if let Err(e) = t.send_node(&iq_node).await {
+                // Remove the waiter on send failure so it doesn't leak.
+                self.iq_waiters.lock().await.remove(&req_id);
+                return Err(e);
+            }
+        }
+        debug!(to = jid, iq_id = %req_id, "Sent pre-key bundle IQ request");
+
+        // Wait up to 10 s for the server response routed by the recv loop.
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
+            .await
+            .map_err(|_| crate::Error::Timeout(format!("pre-key bundle response for {jid}")))?
+            .map_err(|_| crate::Error::Other("IQ waiter sender dropped unexpectedly".into()))?;
+
+        parse_prekey_bundle_response(&response)
+    }
+
+    /// Perform a full X3DH session bootstrap for `jid` and return the new session.
+    ///
+    /// Fetches the remote pre-key bundle, derives the shared secret, and
+    /// returns a ready-to-use `Session`; the caller is responsible for
+    /// persisting it via `store.save_session`.
+    async fn bootstrap_signal_session(&self, jid: &str) -> crate::Result<crate::signal::Session> {
+        let transport = self.transport.as_ref().ok_or(crate::Error::Closed)?;
+
+        let bundle = self.fetch_prekey_bundle(transport, jid).await?;
+
+        let our_identity = {
+            let guard = self.signal_keys.lock().await;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    crate::Error::Signal("Signal keys not loaded — call connect() first".into())
+                })?
+                .identity
+                .clone()
+        };
+
+        let session = crate::signal::Session::from_prekey_bundle(
+            &our_identity,
+            &bundle.identity_pub,
+            &bundle.signed_prekey_pub,
+            bundle.one_time_prekey_pub.as_deref(),
+        )?;
+
+        debug!(to = jid, "X3DH session bootstrap complete");
+        Ok(session)
+    }
+
     /// Send a text message to a JID.
     pub async fn send_text(&self, jid: &str, text: &str) -> crate::Result<()> {
         if !self.connected.load(std::sync::atomic::Ordering::SeqCst) {
@@ -488,11 +728,48 @@ impl WhatsAppClient {
                 }
             }
             _ => {
-                debug!(to = jid, "No Signal session — sending plaintext body");
-                WaNode {
-                    tag: "message".into(),
-                    attrs,
-                    content: WaNodeContent::List(vec![body_node]),
+                // No existing session — attempt X3DH session bootstrap.
+                match self.bootstrap_signal_session(jid).await {
+                    Ok(mut session) => {
+                        let proto_bytes = crate::proto::encode_wa_message(text);
+                        match session.encrypt(&proto_bytes) {
+                            Ok(encrypted) => {
+                                if let Err(e) = self.store.save_session(jid, &session).await {
+                                    warn!(to = jid, error = %e, "Failed to persist bootstrapped Signal session");
+                                }
+                                let ciphertext = crate::proto::encode_signal_message(&encrypted);
+                                let mut enc_attrs = HashMap::new();
+                                enc_attrs.insert("v".into(), "2".into());
+                                enc_attrs.insert("type".into(), "msg".into());
+                                let enc_child = WaNode {
+                                    tag: "enc".into(),
+                                    attrs: enc_attrs,
+                                    content: WaNodeContent::Binary(ciphertext),
+                                };
+                                WaNode {
+                                    tag: "message".into(),
+                                    attrs,
+                                    content: WaNodeContent::List(vec![enc_child]),
+                                }
+                            }
+                            Err(e) => {
+                                warn!(to = jid, error = %e, "Signal encrypt failed after X3DH bootstrap — falling back to plaintext");
+                                WaNode {
+                                    tag: "message".into(),
+                                    attrs,
+                                    content: WaNodeContent::List(vec![body_node]),
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!(to = jid, error = %e, "X3DH bootstrap failed — sending plaintext body");
+                        WaNode {
+                            tag: "message".into(),
+                            attrs,
+                            content: WaNodeContent::List(vec![body_node]),
+                        }
+                    }
                 }
             }
         };
