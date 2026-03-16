@@ -239,6 +239,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub quality_gate: QualityGateConfig,
 
+    /// Learned-routing policy and operator defaults.
+    #[serde(default)]
+    pub learned_routing: LearnedRoutingConfig,
+
     /// Sub-agents available for task delegation.
     #[serde(default)]
     pub sub_agents: Vec<SubAgentConfig>,
@@ -560,6 +564,39 @@ pub struct QualityGateConfig {
     pub auto_accept_learned: bool,
 }
 
+/// Configuration for learned-routing reuse and diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearnedRoutingConfig {
+    /// Enable learned-route reuse during runtime routing.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Minimum effective confidence required before a learned rule is reused.
+    #[serde(default = "default_learned_min_effective_confidence")]
+    pub min_effective_confidence: f64,
+
+    /// Minimum observed samples required before a learned rule is reused.
+    #[serde(default = "default_learned_min_samples")]
+    pub min_samples: u32,
+
+    /// Start penalizing stale rules after this many days without an update.
+    #[serde(default = "default_learned_decay_after_days")]
+    pub decay_after_days: u32,
+
+    /// Maximum age in days before a rule is considered stale for reuse.
+    /// Set to 0 to disable age-based exclusion.
+    #[serde(default = "default_learned_max_rule_age_days")]
+    pub max_rule_age_days: u32,
+
+    /// Confidence penalty applied per day after `decay_after_days`.
+    #[serde(default = "default_learned_staleness_penalty_per_day")]
+    pub staleness_penalty_per_day: f64,
+
+    /// Include penalized rules by default in diagnostics payloads.
+    #[serde(default)]
+    pub diagnostics_include_penalized: bool,
+}
+
 impl Default for QualityGateConfig {
     fn default() -> Self {
         Self {
@@ -568,6 +605,20 @@ impl Default for QualityGateConfig {
             min_response_length: default_min_response_length(),
             max_escalations: default_max_escalations(),
             auto_accept_learned: true,
+        }
+    }
+}
+
+impl Default for LearnedRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_effective_confidence: default_learned_min_effective_confidence(),
+            min_samples: default_learned_min_samples(),
+            decay_after_days: default_learned_decay_after_days(),
+            max_rule_age_days: default_learned_max_rule_age_days(),
+            staleness_penalty_per_day: default_learned_staleness_penalty_per_day(),
+            diagnostics_include_penalized: false,
         }
     }
 }
@@ -989,9 +1040,48 @@ pub struct SandboxConfig {
     /// Whether tool execution is sandboxed by default.
     #[serde(default = "default_true")]
     pub enabled: bool,
+
+    /// Fine-grained sandbox policy defaults for command execution.
+    #[serde(default)]
+    pub policy: SandboxPolicyConfig,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxPolicyConfig {
+    /// Allow outbound network access for sandboxed commands.
+    #[serde(default)]
+    pub allow_network: bool,
+
+    /// Allow writes anywhere under the configured workspace root.
+    #[serde(default = "default_true")]
+    pub allow_workspace_write: bool,
+
+    /// Allow spawned child processes from the command being executed.
+    #[serde(default = "default_true")]
+    pub allow_child_processes: bool,
+
+    /// Additional allowed read paths outside the workspace root.
+    #[serde(default)]
+    pub additional_read_paths: Vec<String>,
+
+    /// Additional allowed write paths outside the workspace root.
+    #[serde(default)]
+    pub additional_write_paths: Vec<String>,
+
+    /// Memory limit in megabytes for a command invocation.
+    #[serde(default = "default_sandbox_memory_limit_mb")]
+    pub memory_limit_mb: u64,
+
+    /// CPU limit in seconds for a command invocation.
+    #[serde(default = "default_sandbox_cpu_limit_seconds")]
+    pub cpu_limit_seconds: u64,
+
+    /// Wall-clock limit in seconds for a command invocation.
+    #[serde(default = "default_sandbox_wall_time_limit_seconds")]
+    pub wall_time_limit_seconds: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SandboxBackend {
     /// Auto-detect based on environment.
     #[default]
@@ -1080,6 +1170,15 @@ fn default_consolidation_interval() -> u64 {
 fn default_semantic_budget() -> usize {
     4096
 }
+fn default_sandbox_memory_limit_mb() -> u64 {
+    512
+}
+fn default_sandbox_cpu_limit_seconds() -> u64 {
+    30
+}
+fn default_sandbox_wall_time_limit_seconds() -> u64 {
+    60
+}
 fn default_otlp_endpoint() -> String {
     "http://localhost:4317".into()
 }
@@ -1130,6 +1229,23 @@ fn default_classifier_temperature() -> f64 {
 }
 fn default_quality_method() -> String {
     "auto".into()
+}
+
+fn default_learned_min_effective_confidence() -> f64 {
+    0.45
+}
+
+fn default_learned_min_samples() -> u32 {
+    1
+}
+fn default_learned_decay_after_days() -> u32 {
+    14
+}
+fn default_learned_max_rule_age_days() -> u32 {
+    90
+}
+fn default_learned_staleness_penalty_per_day() -> f64 {
+    0.01
 }
 fn default_min_response_length() -> usize {
     10
@@ -1275,6 +1391,7 @@ impl Default for AgentConfig {
             routing: RoutingStrategy::default(),
             classifier: None,
             quality_gate: QualityGateConfig::default(),
+            learned_routing: LearnedRoutingConfig::default(),
             sub_agents: vec![],
         }
     }
@@ -1306,6 +1423,22 @@ impl Default for SandboxConfig {
         Self {
             backend: SandboxBackend::Auto,
             enabled: true,
+            policy: SandboxPolicyConfig::default(),
+        }
+    }
+}
+
+impl Default for SandboxPolicyConfig {
+    fn default() -> Self {
+        Self {
+            allow_network: false,
+            allow_workspace_write: true,
+            allow_child_processes: true,
+            additional_read_paths: vec![],
+            additional_write_paths: vec![],
+            memory_limit_mb: default_sandbox_memory_limit_mb(),
+            cpu_limit_seconds: default_sandbox_cpu_limit_seconds(),
+            wall_time_limit_seconds: default_sandbox_wall_time_limit_seconds(),
         }
     }
 }
@@ -1513,6 +1646,28 @@ impl NgenOrcaConfig {
             ));
         }
 
+        if !(0.0..=1.0).contains(&self.agent.learned_routing.min_effective_confidence) {
+            errors.push(format!(
+                "agent.learned_routing.min_effective_confidence must be 0.0–1.0, got {}",
+                self.agent.learned_routing.min_effective_confidence
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.agent.learned_routing.staleness_penalty_per_day) {
+            errors.push(format!(
+                "agent.learned_routing.staleness_penalty_per_day must be 0.0–1.0, got {}",
+                self.agent.learned_routing.staleness_penalty_per_day
+            ));
+        }
+        if self.agent.learned_routing.max_rule_age_days > 0
+            && self.agent.learned_routing.decay_after_days
+                > self.agent.learned_routing.max_rule_age_days
+        {
+            warnings.push(
+                "agent.learned_routing.decay_after_days exceeds agent.learned_routing.max_rule_age_days"
+                    .into(),
+            );
+        }
+
         // Sub-agent uniqueness
         let mut seen_names = std::collections::HashSet::new();
         for sa in &self.agent.sub_agents {
@@ -1525,6 +1680,34 @@ impl NgenOrcaConfig {
                     sa.name
                 ));
             }
+        }
+
+        // ── Sandbox ──
+        if self.sandbox.policy.memory_limit_mb == 0 {
+            warnings.push(
+                "sandbox.policy.memory_limit_mb is 0 — sandboxed commands will have no memory cap"
+                    .into(),
+            );
+        }
+        if self.sandbox.policy.wall_time_limit_seconds == 0 {
+            warnings.push(
+                "sandbox.policy.wall_time_limit_seconds is 0 — sandboxed commands will have no wall-clock cap"
+                    .into(),
+            );
+        }
+        if self.sandbox.policy.cpu_limit_seconds > self.sandbox.policy.wall_time_limit_seconds
+            && self.sandbox.policy.wall_time_limit_seconds > 0
+        {
+            warnings.push(
+                "sandbox.policy.cpu_limit_seconds exceeds sandbox.policy.wall_time_limit_seconds"
+                    .into(),
+            );
+        }
+        if !self.sandbox.enabled && self.sandbox.backend != SandboxBackend::None {
+            warnings.push(
+                "sandbox.enabled is false — sandbox.policy and sandbox.backend settings will not be enforced"
+                    .into(),
+            );
         }
 
         // ── Channels ──
@@ -1786,7 +1969,11 @@ mod tests {
         )
         .unwrap();
 
-        let kilo = cfg.agent.providers.kilo.expect("kilo config should deserialize");
+        let kilo = cfg
+            .agent
+            .providers
+            .kilo
+            .expect("kilo config should deserialize");
         assert_eq!(kilo.api_key.as_deref(), Some("kgw_test"));
         assert_eq!(kilo.base_url, "https://api.kilo.ai/api/gateway");
     }
@@ -1975,6 +2162,32 @@ mod tests {
     }
 
     #[test]
+    fn learned_routing_defaults() {
+        let learned = LearnedRoutingConfig::default();
+        assert!(learned.enabled);
+        assert_eq!(learned.min_effective_confidence, 0.45);
+        assert_eq!(learned.min_samples, 1);
+        assert_eq!(learned.decay_after_days, 14);
+        assert_eq!(learned.max_rule_age_days, 90);
+        assert!((learned.staleness_penalty_per_day - 0.01).abs() < f64::EPSILON);
+        assert!(!learned.diagnostics_include_penalized);
+    }
+
+    #[test]
+    fn validate_warns_on_inverted_learned_route_age_window() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.agent.learned_routing.decay_after_days = 30;
+        cfg.agent.learned_routing.max_rule_age_days = 10;
+
+        let warnings = cfg.validate().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("decay_after_days exceeds") })
+        );
+    }
+
+    #[test]
     fn auth_mode_serde_roundtrip() {
         let modes = vec![
             AuthMode::None,
@@ -2036,6 +2249,24 @@ mod tests {
         let cfg = SandboxConfig::default();
         assert!(cfg.enabled);
         assert!(matches!(cfg.backend, SandboxBackend::Auto));
+        assert!(!cfg.policy.allow_network);
+        assert!(cfg.policy.allow_workspace_write);
+        assert!(cfg.policy.allow_child_processes);
+        assert_eq!(cfg.policy.memory_limit_mb, 512);
+        assert_eq!(cfg.policy.cpu_limit_seconds, 30);
+        assert_eq!(cfg.policy.wall_time_limit_seconds, 60);
+    }
+
+    #[test]
+    fn validate_warns_on_disabled_sandbox_with_policy() {
+        let mut cfg = NgenOrcaConfig::default();
+        cfg.sandbox.enabled = false;
+        let warnings = cfg.validate().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("sandbox.enabled is false") })
+        );
     }
 
     // ── Validation tests ──

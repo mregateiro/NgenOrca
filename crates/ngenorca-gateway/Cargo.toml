@@ -40,3 +40,4 @@ subtle = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 jsonwebtoken = { workspace = true }
+ring = { workspace = true }

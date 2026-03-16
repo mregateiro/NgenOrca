@@ -13,8 +13,10 @@ pub mod subscriber;
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use ngenorca_core::Result;
 use ngenorca_core::event::Event;
+use ngenorca_core::{SessionId, UserId};
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
@@ -34,6 +36,16 @@ struct EventBusInner {
     log: EventLog,
     /// In-memory broadcast sender.
     tx: broadcast::Sender<Event>,
+}
+
+/// Filter options for durable event-log replay.
+#[derive(Debug, Clone, Default)]
+pub struct EventQuery {
+    pub session_id: Option<SessionId>,
+    pub user_id: Option<UserId>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub limit: Option<usize>,
 }
 
 impl EventBus {
@@ -79,6 +91,16 @@ impl EventBus {
     /// Replay events after a specific event ID (for catch-up after reconnection).
     pub fn replay_after(&self, after_id: &ngenorca_core::EventId) -> Result<Vec<Event>> {
         self.inner.log.query_after(after_id)
+    }
+
+    /// Replay the most recent events, preserving ascending order in the returned slice.
+    pub fn replay_recent(&self, limit: usize) -> Result<Vec<Event>> {
+        self.inner.log.query_recent(limit)
+    }
+
+    /// Replay events using durable-log filters for operator history queries.
+    pub fn replay_filtered(&self, query: &EventQuery) -> Result<Vec<Event>> {
+        self.inner.log.query_filtered(query)
     }
 
     /// Get total event count.
@@ -173,6 +195,74 @@ mod tests {
 
         let after = bus.replay_after(&first_id).unwrap();
         assert_eq!(after.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bus_replay_recent_returns_latest_events_in_order() {
+        let bus = EventBus::new(":memory:").await.unwrap();
+
+        let first = sample_event();
+        let first_id = first.id.clone();
+        bus.publish(first).await.unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        let second = sample_event();
+        let second_id = second.id.clone();
+        bus.publish(second).await.unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        let third = sample_event();
+        let third_id = third.id.clone();
+        bus.publish(third).await.unwrap();
+
+        let recent = bus.replay_recent(2).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].id, second_id);
+        assert_eq!(recent[1].id, third_id);
+        assert_ne!(recent[0].id, first_id);
+    }
+
+    #[tokio::test]
+    async fn bus_replay_filtered_by_user_and_time_window() {
+        let bus = EventBus::new(":memory:").await.unwrap();
+
+        let older = Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now() - chrono::Duration::hours(48),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("alice".into())),
+            payload: EventPayload::SessionCreated {
+                session_id: SessionId::new(),
+                user_id: Some(UserId("alice".into())),
+            },
+        };
+        bus.publish(older).await.unwrap();
+
+        let target = Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("bob".into())),
+            payload: EventPayload::SessionCreated {
+                session_id: SessionId::new(),
+                user_id: Some(UserId("bob".into())),
+            },
+        };
+        let target_id = target.id.clone();
+        bus.publish(target).await.unwrap();
+
+        let filtered = bus
+            .replay_filtered(&EventQuery {
+                user_id: Some(UserId("bob".into())),
+                since: Some(chrono::Utc::now() - chrono::Duration::hours(24)),
+                limit: Some(10),
+                ..EventQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, target_id);
+        assert_eq!(filtered[0].user_id, Some(UserId("bob".into())));
     }
 
     #[tokio::test]

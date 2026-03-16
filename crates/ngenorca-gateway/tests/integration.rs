@@ -7,8 +7,16 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
+use base64::Engine;
 use ngenorca_bus::EventBus;
 use ngenorca_config::NgenOrcaConfig;
+use ngenorca_core::event::{Event, EventPayload};
+use ngenorca_core::identity::{AttestationType, UserRole};
+use ngenorca_core::orchestration::{
+    ClassificationMethod, CorrectionRecord, OrchestrationRecord, QualityMethod, QualityVerdict,
+    RoutingDecision, SubAgentId, SynthesisRecord, TaskClassification, TaskComplexity, TaskIntent,
+};
+use ngenorca_core::types::{DeviceId, EventId, SessionId, TrustLevel, UserId};
 use ngenorca_gateway::auth;
 use ngenorca_gateway::metrics::Metrics;
 use ngenorca_gateway::orchestration::LearnedRouter;
@@ -84,6 +92,570 @@ fn build_app(state: AppState) -> axum::Router {
         .layer(CorsLayer::permissive())
 }
 
+fn learned_record(
+    intent: TaskIntent,
+    target: &str,
+    domain_tags: Vec<String>,
+) -> OrchestrationRecord {
+    let classification = TaskClassification {
+        intent,
+        complexity: TaskComplexity::Simple,
+        confidence: 0.95,
+        method: ClassificationMethod::RuleBased,
+        domain_tags,
+        language: Some("en".into()),
+    };
+    let routing = RoutingDecision {
+        target: SubAgentId {
+            name: target.into(),
+            model: "test-model".into(),
+        },
+        reason: "test learned route".into(),
+        system_prompt: String::new(),
+        temperature: Some(0.1),
+        max_tokens: Some(256),
+        from_memory: false,
+    };
+
+    OrchestrationRecord {
+        classification,
+        routing,
+        quality: QualityVerdict::Accept { score: Some(0.9) },
+        quality_method: QualityMethod::Heuristic,
+        escalated: false,
+        user_id: Some(UserId("ops".into())),
+        channel: Some("web".into()),
+        latency_ms: 10,
+        total_tokens: 42,
+        correction: CorrectionRecord {
+            tool_rounds: 1,
+            had_failures: false,
+            had_blocked_calls: false,
+            verification_attempted: true,
+            grounded: true,
+            remediation_attempted: false,
+            remediation_succeeded: false,
+            post_synthesis_verification_attempted: false,
+            post_synthesis_drift_corrected: false,
+        },
+        synthesis: SynthesisRecord {
+            attempted: true,
+            succeeded: true,
+            contradiction_score: 0.0,
+            conflicting_branches: 0,
+        },
+        timestamp: chrono::Utc::now(),
+    }
+}
+
+async fn seed_operator_history_events(state: &AppState) {
+    let mut accepted = learned_record(TaskIntent::Coding, "primary", vec!["rust".into()]);
+    accepted.timestamp = chrono::Utc::now() - chrono::Duration::hours(50);
+
+    let mut escalated = learned_record(TaskIntent::Analysis, "deep-thinker", vec!["logs".into()]);
+    escalated.timestamp = chrono::Utc::now() - chrono::Duration::hours(10);
+    escalated.quality = QualityVerdict::Escalate {
+        reason: "needs deeper review".into(),
+        escalate_to: Some("deep-thinker".into()),
+    };
+    escalated.escalated = true;
+    escalated.channel = Some("web".into());
+    escalated.correction.had_failures = true;
+    escalated.correction.verification_attempted = true;
+    escalated.correction.remediation_attempted = true;
+    escalated.correction.remediation_succeeded = true;
+    escalated.correction.post_synthesis_drift_corrected = true;
+
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: accepted.timestamp,
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("ops".into())),
+            payload: EventPayload::OrchestrationCompleted(accepted),
+        })
+        .await
+        .unwrap();
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: escalated.timestamp,
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("ops".into())),
+            payload: EventPayload::OrchestrationCompleted(escalated),
+        })
+        .await
+        .unwrap();
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now() - chrono::Duration::hours(10),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("ops".into())),
+            payload: EventPayload::ToolExecution {
+                tool_name: "run_command".into(),
+                session_id: SessionId::new(),
+                channel: Some("web".into()),
+                started_at: chrono::Utc::now() - chrono::Duration::hours(10),
+                duration_ms: Some(12),
+                success: Some(false),
+                failure_class: Some("execution".into()),
+                outcome: Some("failed".into()),
+            },
+        })
+        .await
+        .unwrap();
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now() - chrono::Duration::hours(2),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("other".into())),
+            payload: EventPayload::ToolExecution {
+                tool_name: "read_file".into(),
+                session_id: SessionId::new(),
+                channel: Some("cli".into()),
+                started_at: chrono::Utc::now() - chrono::Duration::hours(2),
+                duration_ms: Some(4),
+                success: Some(true),
+                failure_class: None,
+                outcome: Some("success".into()),
+            },
+        })
+        .await
+        .unwrap();
+}
+
+async fn state_with_identity(config: NgenOrcaConfig, identity: IdentityManager) -> AppState {
+    let event_bus = EventBus::new(":memory:").await.unwrap();
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "ngenorca_integ_identity_{}_{unique}",
+        std::process::id(),
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let memory = MemoryManager::new(temp_dir.to_str().unwrap()).unwrap();
+    let providers = ProviderRegistry::from_config(&config);
+    let sessions = SessionManager::new(config.agent.model.clone(), config.agent.thinking_level);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let plugins = PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/test_plugins"));
+    let learned_router = LearnedRouter::new(":memory:").unwrap();
+    let metrics = Metrics::new();
+    AppState::new(AppStateParams {
+        config,
+        config_file_path: temp_dir.join("config.toml"),
+        event_bus,
+        identity,
+        memory,
+        providers,
+        sessions,
+        plugins,
+        learned_router,
+        metrics,
+    })
+}
+
+#[tokio::test]
+async fn whoami_reports_runtime_identity_guidance() {
+    let app = build_app(test_state().await);
+    let req = Request::builder()
+        .uri("/api/v1/whoami")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["identity"]["action"], "require_pairing");
+    assert_eq!(json["identity"]["requires_pairing"], true);
+    assert!(
+        json["identity"]["suggested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().contains("Pair a device"))
+    );
+}
+
+#[tokio::test]
+async fn chat_reports_structured_identity_challenge_details() {
+    let config = NgenOrcaConfig::default();
+    let identity = IdentityManager::new(":memory:").unwrap();
+    let canonical = UserId("owner-alice".into());
+    identity
+        .register_user(canonical.clone(), "Alice".into(), UserRole::Owner)
+        .unwrap();
+    identity
+        .pair_device(
+            &canonical,
+            ngenorca_core::identity::DeviceBinding {
+                device_id: DeviceId("dev-webchat".into()),
+                device_name: "Primary laptop".into(),
+                attestation: AttestationType::CompositeFingerprint,
+                public_key_hash: base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+                trust: TrustLevel::Hardware,
+                paired_at: chrono::Utc::now(),
+                last_used: chrono::Utc::now(),
+            },
+        )
+        .unwrap();
+
+    let app = build_app(state_with_identity(config, identity).await);
+    let body = serde_json::json!({
+        "message": "hello",
+        "device_id": "dev-webchat",
+        "device_signature": base64::engine::general_purpose::STANDARD.encode([0u8; 64])
+    });
+    let req = Request::builder()
+        .uri("/api/v1/chat")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("device verification failed")
+    );
+    assert_eq!(json["identity"]["action"], "challenge");
+    assert_eq!(json["identity"]["requires_challenge"], true);
+    assert_eq!(json["identity"]["device_id"], "dev-webchat");
+    assert!(
+        json["identity"]["suggested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().contains("fresh signed payload"))
+    );
+}
+
+#[tokio::test]
+async fn identity_pairing_endpoints_can_bind_user_and_session() {
+    let state = test_state().await;
+    let session_id = state.sessions().get_or_create(None, "webchat").unwrap();
+    let app = build_app(state.clone());
+
+    let start_req = Request::builder()
+        .uri("/api/v1/identity/pairing/start")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "handle": "alice",
+                "channel": "WebChat"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let start_resp = app.clone().oneshot(start_req).await.unwrap();
+    assert_eq!(start_resp.status(), StatusCode::OK);
+    let start_body = axum::body::to_bytes(start_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let start_json: Value = serde_json::from_slice(&start_body).unwrap();
+    let pairing_id = start_json["pairing_id"].as_str().unwrap();
+
+    let complete_req = Request::builder()
+        .uri("/api/v1/identity/pairing/complete")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "pairing_id": pairing_id,
+                "user_id": "alice",
+                "display_name": "Alice",
+                "role": "owner",
+                "session_id": session_id.to_string(),
+                "channel_id": "webchat:alice"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let complete_resp = app.oneshot(complete_req).await.unwrap();
+    assert_eq!(complete_resp.status(), StatusCode::OK);
+    let complete_body = axum::body::to_bytes(complete_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let complete_json: Value = serde_json::from_slice(&complete_body).unwrap();
+    assert_eq!(complete_json["paired"], true);
+    assert_eq!(complete_json["user"]["user_id"], "alice");
+    assert_eq!(complete_json["session_id"], session_id.to_string());
+    assert_eq!(
+        state.sessions().get(&session_id).unwrap().user_id,
+        Some(UserId("alice".into()))
+    );
+}
+
+#[tokio::test]
+async fn identity_pairing_completion_reuses_existing_canonical_session() {
+    let state = test_state().await;
+    state
+        .identity()
+        .register_user(UserId("alice".into()), "Alice".into(), UserRole::Owner)
+        .unwrap();
+    let canonical_session = state
+        .sessions()
+        .get_or_create(Some(&UserId("alice".into())), "webchat")
+        .unwrap();
+    let anonymous_session = state.sessions().get_or_create(None, "webchat").unwrap();
+    let app = build_app(state.clone());
+
+    let start_req = Request::builder()
+        .uri("/api/v1/identity/pairing/start")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "handle": "alice",
+                "channel": "WebChat"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let start_resp = app.clone().oneshot(start_req).await.unwrap();
+    let start_body = axum::body::to_bytes(start_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let start_json: Value = serde_json::from_slice(&start_body).unwrap();
+    let pairing_id = start_json["pairing_id"].as_str().unwrap();
+
+    let complete_req = Request::builder()
+        .uri("/api/v1/identity/pairing/complete")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "pairing_id": pairing_id,
+                "user_id": "alice",
+                "display_name": "Alice",
+                "role": "owner",
+                "session_id": anonymous_session.to_string(),
+                "channel_id": "webchat:alice"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let complete_resp = app.oneshot(complete_req).await.unwrap();
+    assert_eq!(complete_resp.status(), StatusCode::OK);
+    let complete_body = axum::body::to_bytes(complete_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let complete_json: Value = serde_json::from_slice(&complete_body).unwrap();
+
+    assert_eq!(complete_json["session_id"], canonical_session.to_string());
+    assert_eq!(
+        state.sessions().get(&anonymous_session).unwrap().state,
+        ngenorca_core::session::SessionState::Ended
+    );
+}
+
+#[tokio::test]
+async fn identity_challenge_endpoints_verify_known_device_and_rebind_session() {
+    use ring::signature::{Ed25519KeyPair, KeyPair as _};
+
+    let config = NgenOrcaConfig::default();
+    let identity = IdentityManager::new(":memory:").unwrap();
+    let canonical = UserId("owner-alice".into());
+    identity
+        .register_user(canonical.clone(), "Alice".into(), UserRole::Owner)
+        .unwrap();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    identity
+        .pair_device(
+            &canonical,
+            ngenorca_core::identity::DeviceBinding {
+                device_id: DeviceId("dev-webchat".into()),
+                device_name: "Primary laptop".into(),
+                attestation: AttestationType::CompositeFingerprint,
+                public_key_hash: base64::engine::general_purpose::STANDARD
+                    .encode(key_pair.public_key().as_ref()),
+                trust: TrustLevel::Hardware,
+                paired_at: chrono::Utc::now(),
+                last_used: chrono::Utc::now(),
+            },
+        )
+        .unwrap();
+
+    let state = state_with_identity(config, identity).await;
+    let session_id = state.sessions().get_or_create(None, "webchat").unwrap();
+    let app = build_app(state.clone());
+
+    let start_req = Request::builder()
+        .uri("/api/v1/identity/challenge/start")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "device_id": "dev-webchat",
+                "reason": "retry after signature failure"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let start_resp = app.clone().oneshot(start_req).await.unwrap();
+    assert_eq!(start_resp.status(), StatusCode::OK);
+    let start_body = axum::body::to_bytes(start_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let start_json: Value = serde_json::from_slice(&start_body).unwrap();
+    let challenge_id = start_json["challenge_id"].as_str().unwrap();
+    let nonce = base64::engine::general_purpose::STANDARD
+        .decode(start_json["nonce_b64"].as_str().unwrap())
+        .unwrap();
+    let signature =
+        base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
+
+    let verify_req = Request::builder()
+        .uri("/api/v1/identity/challenge/verify")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "challenge_id": challenge_id,
+                "signature": signature,
+                "session_id": session_id.to_string()
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let verify_resp = app.oneshot(verify_req).await.unwrap();
+    assert_eq!(verify_resp.status(), StatusCode::OK);
+    let verify_body = axum::body::to_bytes(verify_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let verify_json: Value = serde_json::from_slice(&verify_body).unwrap();
+    assert_eq!(verify_json["verified"], true);
+    assert_eq!(verify_json["user_id"], canonical.0);
+    assert_eq!(verify_json["session_id"], session_id.to_string());
+    assert_eq!(
+        state.sessions().get(&session_id).unwrap().user_id,
+        Some(canonical)
+    );
+}
+
+#[tokio::test]
+async fn identity_challenge_verify_reuses_existing_canonical_session_and_links_web_handle() {
+    use ring::signature::{Ed25519KeyPair, KeyPair as _};
+
+    let mut config = NgenOrcaConfig::default();
+    config.gateway.auth_mode = ngenorca_config::AuthMode::TrustedProxy;
+    config.gateway.trusted_proxy_sources.clear();
+
+    let identity = IdentityManager::new(":memory:").unwrap();
+    let canonical = UserId("owner-alice".into());
+    identity
+        .register_user(canonical.clone(), "Alice".into(), UserRole::Owner)
+        .unwrap();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    identity
+        .pair_device(
+            &canonical,
+            ngenorca_core::identity::DeviceBinding {
+                device_id: DeviceId("dev-webchat".into()),
+                device_name: "Primary laptop".into(),
+                attestation: AttestationType::CompositeFingerprint,
+                public_key_hash: base64::engine::general_purpose::STANDARD
+                    .encode(key_pair.public_key().as_ref()),
+                trust: TrustLevel::Hardware,
+                paired_at: chrono::Utc::now(),
+                last_used: chrono::Utc::now(),
+            },
+        )
+        .unwrap();
+
+    let state = state_with_identity(config, identity).await;
+    let canonical_session = state
+        .sessions()
+        .get_or_create(Some(&canonical), "webchat")
+        .unwrap();
+    let anonymous_session = state.sessions().get_or_create(None, "webchat").unwrap();
+    let app = build_app(state.clone());
+
+    let start_req = Request::builder()
+        .uri("/api/v1/identity/challenge/start")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header("remote-user", "alice-proxy")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "device_id": "dev-webchat",
+                "reason": "retry after signature failure"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let start_resp = app.clone().oneshot(start_req).await.unwrap();
+    assert_eq!(start_resp.status(), StatusCode::OK);
+    let start_body = axum::body::to_bytes(start_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let start_json: Value = serde_json::from_slice(&start_body).unwrap();
+    let challenge_id = start_json["challenge_id"].as_str().unwrap();
+    let nonce = base64::engine::general_purpose::STANDARD
+        .decode(start_json["nonce_b64"].as_str().unwrap())
+        .unwrap();
+    let signature =
+        base64::engine::general_purpose::STANDARD.encode(key_pair.sign(&nonce).as_ref());
+
+    let verify_req = Request::builder()
+        .uri("/api/v1/identity/challenge/verify")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header("remote-user", "alice-proxy")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "challenge_id": challenge_id,
+                "signature": signature,
+                "session_id": anonymous_session.to_string()
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let verify_resp = app.oneshot(verify_req).await.unwrap();
+    assert_eq!(verify_resp.status(), StatusCode::OK);
+    let verify_body = axum::body::to_bytes(verify_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let verify_json: Value = serde_json::from_slice(&verify_body).unwrap();
+
+    assert_eq!(verify_json["session_id"], canonical_session.to_string());
+    assert_eq!(verify_json["linked_handles"][0], "alice-proxy");
+    assert_eq!(
+        state
+            .identity()
+            .resolve_by_channel(&ngenorca_core::types::ChannelKind::WebChat, "alice-proxy")
+            .unwrap()
+            .unwrap()
+            .0,
+        canonical
+    );
+    assert_eq!(
+        state.sessions().get(&anonymous_session).unwrap().state,
+        ngenorca_core::session::SessionState::Ended
+    );
+}
+
 // ─── Health endpoint ────────────────────────────────────────────────
 
 #[tokio::test]
@@ -101,6 +673,7 @@ async fn health_returns_200_without_auth() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "healthy");
+    assert!(json["sandbox"]["environment"].is_string());
 }
 
 // ─── Version endpoint ───────────────────────────────────────────────
@@ -230,6 +803,421 @@ enabled = true
     let persisted = std::fs::read_to_string(&config_file_path).unwrap();
     assert!(persisted.contains("[agent]"));
     assert!(persisted.contains("anthropic/claude-sonnet-4-20250514"));
+}
+
+#[tokio::test]
+async fn orchestration_endpoint_reports_learned_route_diagnostics() {
+    let state = test_state().await;
+    state
+        .learned_router()
+        .ingest(&learned_record(TaskIntent::Coding, "primary", vec![]))
+        .unwrap();
+    let mut escalated = learned_record(TaskIntent::Analysis, "deep-thinker", vec!["logs".into()]);
+    escalated.quality = QualityVerdict::Escalate {
+        reason: "needs deeper review".into(),
+        escalate_to: Some("deep-thinker".into()),
+    };
+    escalated.escalated = true;
+    escalated.latency_ms = 50;
+    escalated.total_tokens = 120;
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("ops".into())),
+            payload: EventPayload::OrchestrationCompleted(learned_record(
+                TaskIntent::Coding,
+                "primary",
+                vec!["rust".into()],
+            )),
+        })
+        .await
+        .unwrap();
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("ops".into())),
+            payload: EventPayload::OrchestrationCompleted(escalated),
+        })
+        .await
+        .unwrap();
+    state
+        .event_bus()
+        .publish(Event {
+            id: EventId::new(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some(SessionId::new()),
+            user_id: Some(UserId("ops".into())),
+            payload: EventPayload::ToolExecution {
+                tool_name: "run_command".into(),
+                session_id: SessionId::new(),
+                channel: Some("web".into()),
+                started_at: chrono::Utc::now(),
+                duration_ms: Some(12),
+                success: Some(false),
+                failure_class: Some("execution".into()),
+                outcome: Some("failed".into()),
+            },
+        })
+        .await
+        .unwrap();
+
+    let app = build_app(state);
+    let req = Request::builder()
+        .uri("/api/v1/orchestration")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["learned_routes"]["count"], 1);
+    assert_eq!(
+        json["learned_routes"]["rules"][0]["rule"]["target_agent"],
+        "primary"
+    );
+    assert!(json["learned_routes"]["rules"][0]["effective_confidence"].is_number());
+    assert!(json["learned_routes"]["rules"][0]["adaptive_decay_multiplier"].is_number());
+    assert!(json["learned_routes"]["rules"][0]["outcome_trend_adjustment"].is_number());
+    assert!(json["learned_routes"]["rules"][0]["accept_rate"].is_number());
+    assert!(json["learned_routes"]["rules"][0]["stability_score"].is_number());
+    assert_eq!(json["learned_routes"]["history"]["total_rules"], 1);
+    assert!(
+        json["learned_routes"]["history"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "primary")
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["response_metadata_exposed"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_structured_planning"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_tool_verification"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_branch_contradiction_analysis"],
+        true
+    );
+    assert_eq!(
+        json["execution_diagnostics"]["tracks_learned_route_trends"],
+        true
+    );
+    assert!(
+        json["execution_diagnostics"]["worker_stage_reporting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "parallel-support")
+    );
+    assert!(
+        json["execution_diagnostics"]["worker_stage_reporting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "escalation")
+    );
+    assert_eq!(json["recent_history"]["orchestration_count"], 2);
+    assert_eq!(json["recent_history"]["tool_event_count"], 1);
+    assert!(json["recent_history"]["escalation_rate"].as_f64().unwrap() > 0.0);
+    assert!(
+        json["recent_history"]["tool_failure_rate"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        json["recent_history"]["grounded_response_rate"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        json["recent_history"]["correction_attempt_rate"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        json["recent_history"]["intent_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Coding")
+    );
+    assert!(
+        json["recent_history"]["user_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "ops")
+    );
+    assert!(
+        json["recent_history"]["channel_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "web")
+    );
+    assert!(
+        json["recent_history"]["tool_mix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "run_command")
+    );
+    assert!(
+        json["recent_history"]["recent_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "run_command:execution")
+    );
+}
+
+#[tokio::test]
+async fn classify_preview_uses_learned_route_when_available() {
+    let state = test_state().await;
+    state
+        .learned_router()
+        .ingest(&learned_record(
+            TaskIntent::Coding,
+            "primary",
+            vec!["rust".into()],
+        ))
+        .unwrap();
+
+    let app = build_app(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/orchestration/classify")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "message": "write a function to sort a list in rust" }).to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["routing"]["target_agent"], "primary");
+    assert!(json["routing"]["reason"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn learned_routes_endpoint_supports_filtering_and_clear() {
+    let state = test_state().await;
+    state
+        .learned_router()
+        .ingest(&learned_record(
+            TaskIntent::Coding,
+            "primary",
+            vec!["rust".into()],
+        ))
+        .unwrap();
+    state
+        .learned_router()
+        .ingest(&learned_record(TaskIntent::Analysis, "primary", vec![]))
+        .unwrap();
+
+    let app = build_app(state.clone());
+    let req = Request::builder()
+        .uri("/api/v1/orchestration/learned?intent=Coding")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["rules"][0]["rule"]["intent"], "Coding");
+    assert!(json["rules"][0]["adaptive_decay_multiplier"].is_number());
+    assert!(json["rules"][0]["accept_rate"].is_number());
+    assert!(
+        json["history"]["intents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Coding")
+    );
+
+    let delete_req = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/orchestration/learned?intent=Coding")
+        .body(Body::empty())
+        .unwrap();
+    let delete_resp = app.clone().oneshot(delete_req).await.unwrap();
+    assert_eq!(delete_resp.status(), StatusCode::OK);
+
+    let verify_req = Request::builder()
+        .uri("/api/v1/orchestration/learned?include_penalized=true")
+        .body(Body::empty())
+        .unwrap();
+    let verify_resp = app.oneshot(verify_req).await.unwrap();
+    assert_eq!(verify_resp.status(), StatusCode::OK);
+
+    let verify_body = axum::body::to_bytes(verify_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let verify_json: Value = serde_json::from_slice(&verify_body).unwrap();
+    assert_eq!(verify_json["count"], 1);
+    assert_eq!(verify_json["rules"][0]["rule"]["intent"], "Analysis");
+    assert!(
+        verify_json["history"]["intents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["label"] == "Analysis")
+    );
+}
+
+#[tokio::test]
+async fn learned_routes_endpoint_reports_stale_rules() {
+    let state = test_state().await;
+    let mut stale = learned_record(TaskIntent::Coding, "primary", vec!["rust".into()]);
+    stale.timestamp = chrono::Utc::now() - chrono::Duration::days(120);
+    state.learned_router().ingest(&stale).unwrap();
+
+    let app = build_app(state);
+    let req = Request::builder()
+        .uri("/api/v1/orchestration/learned?include_penalized=true&stale_only=true")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["rules"][0]["stale"], true);
+    assert!(json["rules"][0]["age_days"].as_u64().unwrap() >= 120);
+}
+
+#[tokio::test]
+async fn status_reports_sandbox_policy_details() {
+    let mut config = NgenOrcaConfig::default();
+    config.sandbox.policy.allow_network = true;
+    config.sandbox.policy.allow_workspace_write = false;
+    config.sandbox.policy.additional_read_paths = vec!["/tmp/ngenorca-read".into()];
+    config.sandbox.policy.additional_write_paths = vec!["/tmp/ngenorca-write".into()];
+    config.sandbox.policy.memory_limit_mb = 256;
+    config.sandbox.policy.cpu_limit_seconds = 12;
+    config.sandbox.policy.wall_time_limit_seconds = 20;
+
+    let app = build_app(state_with_config(config).await);
+    let req = Request::builder()
+        .uri("/api/v1/status")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["sandbox"]["policy"]["allow_network"], true);
+    assert_eq!(json["sandbox"]["policy"]["allow_workspace_write"], false);
+    assert_eq!(json["sandbox"]["policy"]["memory_limit_mb"], 256);
+    assert_eq!(json["sandbox"]["policy"]["cpu_limit_seconds"], 12);
+    assert_eq!(json["sandbox"]["policy"]["wall_time_limit_seconds"], 20);
+    assert_eq!(
+        json["sandbox"]["policy"]["additional_read_paths"][0],
+        "/tmp/ngenorca-read"
+    );
+    assert_eq!(
+        json["sandbox"]["policy"]["additional_write_paths"][0],
+        "/tmp/ngenorca-write"
+    );
+    assert!(json["sandbox"]["requested_backend"].is_string());
+    assert!(json["sandbox"]["audit"]["backend"].is_string());
+    assert!(json["events"]["retention_days"].is_u64());
+}
+
+#[tokio::test]
+async fn event_history_endpoint_supports_filtered_failures() {
+    let state = test_state().await;
+    seed_operator_history_events(&state).await;
+
+    let app = build_app(state);
+    let req = Request::builder()
+        .uri("/api/v1/events/history?kind=tool_execution&tool_name=run_command&failure_only=true&since_hours=48")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["matched_events"], 1);
+    assert_eq!(json["events"][0]["event_kind"], "tool_execution");
+    assert_eq!(json["events"][0]["summary"]["tool_name"], "run_command");
+    assert_eq!(json["history"]["tool_event_count"], 1);
+    assert!(
+        json["history"]["recent_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "run_command:execution")
+    );
+}
+
+#[tokio::test]
+async fn correction_timeline_endpoint_groups_longer_horizon_activity() {
+    let state = test_state().await;
+    seed_operator_history_events(&state).await;
+
+    let app = build_app(state);
+    let req = Request::builder()
+        .uri("/api/v1/events/timeline/corrections?channel=web&since_hours=72&bucket_hours=24")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["bucket_count"].as_u64().unwrap() >= 1);
+    assert!(
+        json["buckets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["correction_attempts"].as_u64().unwrap() > 0)
+    );
+    assert!(
+        json["buckets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|bucket| bucket["tool_failures"].as_u64().unwrap() > 0)
+    );
 }
 
 // ─── Request-ID propagation ─────────────────────────────────────────
@@ -806,8 +1794,25 @@ async fn start_test_server(
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Give the server a moment to accept connections.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait until the listener is accepting connections to avoid CI timing flakes.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => {
+                drop(stream);
+                break;
+            }
+            _ if tokio::time::Instant::now() >= deadline => {
+                panic!("test server did not become ready in time");
+            }
+            _ => tokio::time::sleep(std::time::Duration::from_millis(25)).await,
+        }
+    }
 
     (addr, state, handle)
 }

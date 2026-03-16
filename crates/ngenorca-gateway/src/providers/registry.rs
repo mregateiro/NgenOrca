@@ -192,9 +192,9 @@ impl ProviderRegistry {
     pub fn resolve(&self, model: &str) -> Result<Arc<dyn ModelProvider>> {
         let provider_name = canonical_provider_name(
             model
-            .split_once('/')
-            .map(|(p, _)| p)
-            .unwrap_or(&self.default_provider),
+                .split_once('/')
+                .map(|(p, _)| p)
+                .unwrap_or(&self.default_provider),
         );
 
         self.providers.get(provider_name).cloned().ok_or_else(|| {
@@ -334,7 +334,9 @@ mod tests {
         });
 
         let registry = ProviderRegistry::from_config(&config);
-        let provider = registry.resolve("kilocode/anthropic/claude-sonnet-4.5").unwrap();
+        let provider = registry
+            .resolve("kilocode/anthropic/claude-sonnet-4.5")
+            .unwrap();
         assert_eq!(provider.provider_name(), "kilo");
     }
 }

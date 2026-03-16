@@ -13,5 +13,5 @@ pub mod quality;
 
 pub use classifier::RuleBasedClassifier;
 pub use learned::LearnedRouter;
-pub use orchestrator::HybridOrchestrator;
+pub use orchestrator::{HybridOrchestrator, InvocationContext};
 pub use quality::HeuristicQualityGate;

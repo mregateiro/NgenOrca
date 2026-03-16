@@ -46,6 +46,8 @@ pub struct PluginRegistry {
     event_tx: tokio::sync::mpsc::UnboundedSender<Event>,
     /// Data directory root for plugin storage.
     data_dir: std::path::PathBuf,
+    /// Whether sandbox-required tools are allowed to execute.
+    sandbox_enabled: bool,
 }
 
 struct RegisteredPlugin {
@@ -74,6 +76,14 @@ impl PluginRegistry {
         event_tx: tokio::sync::mpsc::UnboundedSender<Event>,
         data_dir: std::path::PathBuf,
     ) -> Self {
+        Self::new_with_sandbox(event_tx, data_dir, true)
+    }
+
+    pub fn new_with_sandbox(
+        event_tx: tokio::sync::mpsc::UnboundedSender<Event>,
+        data_dir: std::path::PathBuf,
+        sandbox_enabled: bool,
+    ) -> Self {
         Self {
             plugins: RwLock::new(Vec::new()),
             tools: RwLock::new(HashMap::new()),
@@ -81,6 +91,7 @@ impl PluginRegistry {
             adapter_index: RwLock::new(HashMap::new()),
             event_tx,
             data_dir,
+            sandbox_enabled,
         }
     }
 
@@ -259,6 +270,11 @@ impl PluginRegistry {
         // it needs a sandbox but no sandbox runtime is currently available.
         let def = tool.definition();
         if def.requires_sandbox {
+            if !self.sandbox_enabled {
+                return Err(Error::Sandbox(format!(
+                    "Tool '{name}' requires sandbox execution, but sandboxing is disabled in configuration"
+                )));
+            }
             warn!(
                 tool = %name,
                 "Tool requires sandbox — executing in sandboxed context"
@@ -484,6 +500,8 @@ mod tests {
     /// A test tool.
     struct TestTool;
 
+    struct SandboxTool;
+
     #[async_trait]
     impl AgentTool for TestTool {
         fn definition(&self) -> ToolDefinition {
@@ -505,9 +523,39 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl AgentTool for SandboxTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "sandbox_tool".into(),
+                description: "A sandboxed test tool".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                requires_sandbox: true,
+            }
+        }
+
+        async fn execute(
+            &self,
+            _arguments: serde_json::Value,
+            _session_id: &ngenorca_core::SessionId,
+            _user_id: Option<&ngenorca_core::UserId>,
+        ) -> ngenorca_core::Result<serde_json::Value> {
+            Ok(serde_json::json!({ "result": "sandbox-ok" }))
+        }
+    }
+
     fn make_registry() -> PluginRegistry {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         PluginRegistry::new(tx, std::path::PathBuf::from("/tmp/ngenorca/plugins"))
+    }
+
+    fn make_registry_with_sandbox(enabled: bool) -> PluginRegistry {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        PluginRegistry::new_with_sandbox(
+            tx,
+            std::path::PathBuf::from("/tmp/ngenorca/plugins"),
+            enabled,
+        )
     }
 
     #[tokio::test]
@@ -572,6 +620,25 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn sandbox_tool_is_blocked_when_sandbox_disabled() {
+        let registry = make_registry_with_sandbox(false);
+        registry.register_tool(Arc::new(SandboxTool)).await;
+
+        let result = registry
+            .execute_tool(
+                "sandbox_tool",
+                serde_json::json!({}),
+                &ngenorca_core::SessionId::new(),
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("requires sandbox execution"));
     }
 
     #[tokio::test]

@@ -5,6 +5,53 @@ use ngenorca_core::types::{ChannelKind, DeviceId, TrustLevel, UserId};
 
 use crate::IdentityManager;
 
+pub fn channel_handle_candidates(channel_kind: &ChannelKind, handle: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let trimmed = handle.trim();
+    if trimmed.is_empty() {
+        return values;
+    }
+
+    push_basic_candidates(&mut values, trimmed);
+
+    let unprefixed = strip_channel_prefix(trimmed);
+    push_basic_candidates(&mut values, unprefixed);
+
+    match channel_kind {
+        ChannelKind::Telegram | ChannelKind::Discord | ChannelKind::IRC => {
+            push_username_candidates(&mut values, unprefixed);
+            push_bracketed_mention_candidates(&mut values, unprefixed);
+        }
+        ChannelKind::WhatsApp | ChannelKind::Signal | ChannelKind::IMessage => {
+            push_phone_candidates(&mut values, unprefixed);
+        }
+        ChannelKind::Matrix => {
+            push_matrix_candidates(&mut values, unprefixed);
+        }
+        ChannelKind::Slack => {
+            push_basic_candidates(&mut values, strip_slack_mention(unprefixed));
+            push_bracketed_mention_candidates(&mut values, unprefixed);
+            push_username_candidates(&mut values, unprefixed);
+        }
+        ChannelKind::Teams => {
+            let stripped = strip_teams_prefix(unprefixed);
+            push_basic_candidates(&mut values, stripped);
+            push_username_candidates(&mut values, stripped);
+            push_email_candidates(&mut values, stripped);
+        }
+        ChannelKind::WebChat => {
+            push_web_candidates(&mut values, unprefixed);
+        }
+        ChannelKind::Custom(_) => {
+            push_username_candidates(&mut values, unprefixed);
+            push_phone_candidates(&mut values, unprefixed);
+            push_email_candidates(&mut values, unprefixed);
+        }
+    }
+
+    values
+}
+
 /// Resolution result from the identity system.
 #[derive(Debug, Clone)]
 pub struct ResolvedIdentity {
@@ -144,6 +191,121 @@ pub fn resolve_from_channel(
             trust: TrustLevel::Unknown,
             action: IdentityAction::RequirePairing,
         }),
+    }
+}
+
+fn push_basic_candidates(values: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    push_unique(values, trimmed.to_string());
+
+    let lowercase = trimmed.to_ascii_lowercase();
+    if lowercase != trimmed {
+        push_unique(values, lowercase);
+    }
+}
+
+fn push_username_candidates(values: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim().trim_start_matches('@');
+    if trimmed.is_empty() {
+        return;
+    }
+
+    push_basic_candidates(values, trimmed);
+    push_basic_candidates(values, &format!("@{trimmed}"));
+}
+
+fn push_phone_candidates(values: &mut Vec<String>, raw: &str) {
+    let trimmed = raw
+        .trim()
+        .trim_start_matches("tel:")
+        .trim_start_matches("sms:")
+        .trim_start_matches("waid:");
+    let digits: String = trimmed.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return;
+    }
+
+    push_unique(values, digits.clone());
+    push_unique(values, format!("+{digits}"));
+}
+
+fn push_matrix_candidates(values: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    push_basic_candidates(values, trimmed);
+
+    if let Some((local_part, _)) = trimmed.split_once(':') {
+        push_username_candidates(values, local_part);
+    } else {
+        push_username_candidates(values, trimmed);
+    }
+}
+
+fn push_web_candidates(values: &mut Vec<String>, raw: &str) {
+    push_basic_candidates(values, raw);
+    push_email_candidates(values, raw);
+}
+
+fn push_email_candidates(values: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim();
+    if let Some((local_part, _)) = trimmed.split_once('@') {
+        push_basic_candidates(values, local_part);
+    }
+}
+
+fn push_bracketed_mention_candidates(values: &mut Vec<String>, raw: &str) {
+    let trimmed = raw.trim();
+    if let Some(inner) = trimmed
+        .strip_prefix("<@")
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        let inner = inner.trim_start_matches('!').trim_start_matches('&');
+        push_basic_candidates(values, inner);
+    }
+}
+
+fn strip_channel_prefix(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    match trimmed.split_once(':') {
+        Some((prefix, tail))
+            if !tail.is_empty()
+                && prefix
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') =>
+        {
+            tail
+        }
+        _ => trimmed,
+    }
+}
+
+fn strip_slack_mention(raw: &str) -> &str {
+    raw.trim()
+        .strip_prefix("<@")
+        .and_then(|value| value.strip_suffix('>'))
+        .unwrap_or(raw)
+}
+
+fn strip_teams_prefix(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    for prefix in ["8:orgid:", "8:", "29:", "orgid:"] {
+        if let Some(stripped) = trimmed.strip_prefix(prefix) {
+            return stripped;
+        }
+    }
+    trimmed
+}
+
+fn push_unique(values: &mut Vec<String>, candidate: String) {
+    if !candidate.is_empty() && !values.iter().any(|existing| existing == &candidate) {
+        values.push(candidate);
     }
 }
 
@@ -306,6 +468,26 @@ mod tests {
         let result = resolve_from_channel(&mgr, &ChannelKind::Telegram, "@nobody").unwrap();
         assert!(result.user_id.is_none());
         assert_eq!(result.action, IdentityAction::RequirePairing);
+    }
+
+    #[test]
+    fn channel_handle_candidates_cover_common_alias_forms() {
+        assert!(
+            channel_handle_candidates(&ChannelKind::WhatsApp, "whatsapp:+1 (555) 010-0200")
+                .contains(&"15550100200".to_string())
+        );
+        assert!(
+            channel_handle_candidates(&ChannelKind::Slack, "<@U123ABC>")
+                .contains(&"U123ABC".to_string())
+        );
+        assert!(
+            channel_handle_candidates(&ChannelKind::Discord, "<@!998877>")
+                .contains(&"998877".to_string())
+        );
+        assert!(
+            channel_handle_candidates(&ChannelKind::Teams, "8:orgid:alice@example.com")
+                .contains(&"alice".to_string())
+        );
     }
 
     #[test]

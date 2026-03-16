@@ -275,6 +275,284 @@ pub struct OrchestratedResponse {
     pub total_usage: Usage,
     /// Total latency in milliseconds.
     pub latency_ms: u64,
+    /// Operator-facing execution diagnostics for worker and correction paths.
+    pub diagnostics: OrchestrationDiagnostics,
+}
+
+/// Operator-facing execution diagnostics captured during orchestration.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct OrchestrationDiagnostics {
+    /// Structured worker plan, when the task was decomposed before execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<DelegationPlanDiagnostics>,
+    /// Worker routing and handoff stages encountered while serving the request.
+    #[serde(default)]
+    pub worker_stages: Vec<WorkerExecutionTrace>,
+    /// Tool verification and remediation diagnostics.
+    #[serde(default)]
+    pub correction: CorrectionDiagnostics,
+    /// Primary synthesis diagnostics.
+    #[serde(default)]
+    pub synthesis: SynthesisDiagnostics,
+}
+
+/// One worker-stage execution result.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorkerExecutionTrace {
+    pub stage: String,
+    pub agent: SubAgentId,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Structured execution plan emitted for complex delegated work.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DelegationPlanDiagnostics {
+    pub strategy: String,
+    #[serde(default)]
+    pub steps: Vec<DelegationStepDiagnostics>,
+}
+
+/// One planned execution step.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DelegationStepDiagnostics {
+    pub id: String,
+    pub goal: String,
+    pub agent: SubAgentId,
+}
+
+/// Tool correction-loop diagnostics for a single orchestration cycle.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CorrectionDiagnostics {
+    pub tool_rounds: usize,
+    #[serde(default)]
+    pub tools_used: Vec<String>,
+    pub had_failures: bool,
+    pub had_blocked_calls: bool,
+    pub verification_attempted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerificationDiagnostics>,
+    pub remediation_attempted: bool,
+    pub remediation_succeeded: bool,
+    #[serde(default)]
+    pub post_synthesis_verification_attempted: bool,
+    #[serde(default)]
+    pub post_synthesis_drift_corrected: bool,
+    #[serde(default)]
+    pub attempt_trace: Vec<CorrectionAttemptTrace>,
+}
+
+/// One tool-call correction attempt captured for operator diagnostics.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CorrectionAttemptTrace {
+    pub round: usize,
+    pub tool: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+}
+
+/// Verification-pass diagnostics.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct VerificationDiagnostics {
+    pub grounded: bool,
+    pub should_retry_tools: bool,
+    #[serde(default)]
+    pub issues: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_instruction: Option<String>,
+}
+
+/// Primary-synthesis diagnostics.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SynthesisDiagnostics {
+    pub attempted: bool,
+    pub succeeded: bool,
+    pub used_primary: bool,
+    pub fallback_to_worker: bool,
+    pub memory_slicing_applied: bool,
+    #[serde(default)]
+    pub contradiction_score: f64,
+    #[serde(default)]
+    pub conflicting_branches: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contradiction_anchor_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciliation_strategy: Option<String>,
+    #[serde(default)]
+    pub conflict_summary: Vec<String>,
+    #[serde(default)]
+    pub contradiction_signals: Vec<String>,
+    #[serde(default)]
+    pub branch_evidence: Vec<BranchEvidenceDiagnostics>,
+}
+
+/// Structured evidence and memory-slice metadata captured per delegated branch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BranchEvidenceDiagnostics {
+    pub stage: String,
+    pub agent: SubAgentId,
+    pub branch_role: String,
+    pub memory_scope: String,
+    pub evidence_focus: String,
+    #[serde(default)]
+    pub evidence_items: Vec<String>,
+}
+
+/// Review and lifecycle status for a reusable skill artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillArtifactStatus {
+    #[default]
+    Draft,
+    Reviewed,
+    Approved,
+    Deprecated,
+}
+
+/// Lifecycle and governance metadata for a stored skill artifact.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillLifecycle {
+    #[serde(default = "default_skill_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub status: SkillArtifactStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub usage_count: u64,
+    #[serde(default)]
+    pub execution_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_executed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_execution_status: Option<String>,
+    #[serde(default = "default_requires_operator_review")]
+    pub requires_operator_review: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<String>,
+    #[serde(default)]
+    pub review_notes: Vec<String>,
+}
+
+impl Default for SkillLifecycle {
+    fn default() -> Self {
+        Self {
+            version: default_skill_version(),
+            status: SkillArtifactStatus::Draft,
+            created_at: None,
+            updated_at: None,
+            last_used_at: None,
+            usage_count: 0,
+            execution_count: 0,
+            last_executed_at: None,
+            last_checkpoint_at: None,
+            last_execution_status: None,
+            requires_operator_review: default_requires_operator_review(),
+            reviewed_by: None,
+            review_notes: Vec::new(),
+        }
+    }
+}
+
+fn default_skill_version() -> u32 {
+    1
+}
+
+fn default_requires_operator_review() -> bool {
+    true
+}
+
+/// A reusable skill or automation artifact that the assistant can store and reuse.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillArtifact {
+    /// Stable artifact name.
+    pub name: String,
+    /// Human-readable description of when the skill should be used.
+    pub description: String,
+    /// Optional task-intent labels or scenarios that this skill helps with.
+    #[serde(default)]
+    pub intent_tags: Vec<String>,
+    /// Optional domain labels (e.g. rust, deployment, docs).
+    #[serde(default)]
+    pub domain_tags: Vec<String>,
+    /// Preferred tools or capabilities for this skill.
+    #[serde(default)]
+    pub preferred_tools: Vec<String>,
+    /// Constraints or safety notes that apply while executing the skill.
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    /// Ordered execution steps for the skill.
+    #[serde(default)]
+    pub steps: Vec<AutomationStep>,
+    /// Optional examples or usage notes.
+    #[serde(default)]
+    pub examples: Vec<String>,
+    /// Lifecycle and review metadata for the stored skill.
+    #[serde(default)]
+    pub lifecycle: SkillLifecycle,
+}
+
+/// One step in a reusable skill or automation recipe.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AutomationStep {
+    /// Short title for the step.
+    pub title: String,
+    /// Instruction for what to do.
+    pub instruction: String,
+    /// Stable identifier for execution journals and rollback planning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
+    /// Optional tool that this step expects to use.
+    #[serde(default)]
+    pub tool: Option<String>,
+    /// Optional example tool arguments template for the step.
+    #[serde(default)]
+    pub arguments: Option<serde_json::Value>,
+    /// Optional verification guidance for confirming the step succeeded.
+    #[serde(default)]
+    pub verification: Option<String>,
+    /// Optional rollback guidance if this step changes state.
+    #[serde(default)]
+    pub rollback: Option<String>,
+    /// Explicit checkpoints that should be recorded before or after this step.
+    #[serde(default)]
+    pub checkpoints: Vec<String>,
+    /// Platform or runtime hints relevant for staged execution.
+    #[serde(default)]
+    pub platform_hints: Vec<String>,
+    /// Whether the operator should confirm before this step executes.
+    #[serde(default)]
+    pub requires_confirmation: bool,
+}
+
+/// Lightweight listing view for a stored skill artifact.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillArtifactSummary {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub intent_tags: Vec<String>,
+    #[serde(default)]
+    pub domain_tags: Vec<String>,
+    pub step_count: usize,
+    #[serde(default = "default_skill_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub status: SkillArtifactStatus,
+    #[serde(default)]
+    pub usage_count: u64,
+    #[serde(default = "default_requires_operator_review")]
+    pub requires_operator_review: bool,
 }
 
 #[cfg(test)]
@@ -523,6 +801,7 @@ mod tests {
                 total_tokens: 70,
             },
             latency_ms: 150,
+            diagnostics: OrchestrationDiagnostics::default(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: OrchestratedResponse = serde_json::from_str(&json).unwrap();
@@ -561,9 +840,194 @@ mod tests {
             escalated: true,
             total_usage: Usage::default(),
             latency_ms: 3000,
+            diagnostics: OrchestrationDiagnostics::default(),
         };
         assert!(resp.escalated);
         assert_eq!(resp.latency_ms, 3000);
+    }
+
+    #[test]
+    fn orchestration_diagnostics_plan_serde_roundtrip() {
+        let diagnostics = OrchestrationDiagnostics {
+            plan: Some(DelegationPlanDiagnostics {
+                strategy: "structured-sequential".into(),
+                steps: vec![
+                    DelegationStepDiagnostics {
+                        id: "frame-task".into(),
+                        goal: "Clarify constraints first.".into(),
+                        agent: agent_id("planner", "anthropic/claude-sonnet-4"),
+                    },
+                    DelegationStepDiagnostics {
+                        id: "execute-domain-work".into(),
+                        goal: "Implement the requested code change.".into(),
+                        agent: agent_id("coder", "ollama/codellama:13b"),
+                    },
+                ],
+            }),
+            worker_stages: vec![],
+            correction: CorrectionDiagnostics {
+                post_synthesis_verification_attempted: true,
+                post_synthesis_drift_corrected: true,
+                attempt_trace: vec![CorrectionAttemptTrace {
+                    round: 1,
+                    tool: "write_file".into(),
+                    outcome: "failed".into(),
+                    failure_class: Some("path".into()),
+                    guidance: Some("Verify the target path before retrying once.".into()),
+                }],
+                ..Default::default()
+            },
+            synthesis: SynthesisDiagnostics {
+                attempted: true,
+                succeeded: true,
+                used_primary: true,
+                fallback_to_worker: false,
+                memory_slicing_applied: true,
+                contradiction_score: 0.35,
+                conflicting_branches: 1,
+                contradiction_anchor_stage: Some("execute-domain-work".into()),
+                reconciliation_strategy: Some("weighted_branch_evidence".into()),
+                conflict_summary: vec![
+                    "cross-check branch flagged a dependency risk against the execution draft"
+                        .into(),
+                ],
+                contradiction_signals: vec![
+                    "negated_action_overlap: dependency, update".into(),
+                    "conflict_markers_present".into(),
+                ],
+                branch_evidence: vec![BranchEvidenceDiagnostics {
+                    stage: "frame-task".into(),
+                    agent: agent_id("planner", "anthropic/claude-sonnet-4"),
+                    branch_role: "support".into(),
+                    memory_scope: "goal-and-constraint slice".into(),
+                    evidence_focus: "Prioritize goals, constraints, and recent active context."
+                        .into(),
+                    evidence_items: vec![
+                        "semantic::goal::Migrate the deployment pipeline".into(),
+                        "working::user::Need a rollout plan with rollback".into(),
+                    ],
+                }],
+            },
+        };
+
+        let json = serde_json::to_string(&diagnostics).unwrap();
+        let back: OrchestrationDiagnostics = serde_json::from_str(&json).unwrap();
+        let plan = back.plan.expect("structured plan should deserialize");
+        assert_eq!(plan.strategy, "structured-sequential");
+        assert_eq!(plan.steps.len(), 2);
+        assert_eq!(plan.steps[0].agent.name, "planner");
+        assert_eq!(plan.steps[1].id, "execute-domain-work");
+        assert!(back.synthesis.memory_slicing_applied);
+        assert_eq!(back.correction.attempt_trace.len(), 1);
+        assert!(back.correction.post_synthesis_drift_corrected);
+        assert_eq!(
+            back.synthesis.reconciliation_strategy.as_deref(),
+            Some("weighted_branch_evidence")
+        );
+        assert_eq!(back.synthesis.conflicting_branches, 1);
+        assert_eq!(
+            back.synthesis.contradiction_anchor_stage.as_deref(),
+            Some("execute-domain-work")
+        );
+        assert_eq!(back.synthesis.contradiction_signals.len(), 2);
+        assert_eq!(back.synthesis.branch_evidence.len(), 1);
+        assert_eq!(back.synthesis.branch_evidence[0].stage, "frame-task");
+    }
+
+    #[test]
+    fn skill_artifact_serde_roundtrip() {
+        let skill = SkillArtifact {
+            name: "rust-build-fix".into(),
+            description: "Repair a Rust build, rerun tests, and summarize the result.".into(),
+            intent_tags: vec!["Coding".into(), "ToolUse".into()],
+            domain_tags: vec!["rust".into(), "workspace".into()],
+            preferred_tools: vec!["read_file".into(), "run_command".into()],
+            constraints: vec!["Do not claim success until tests pass.".into()],
+            steps: vec![AutomationStep {
+                title: "Run tests".into(),
+                instruction: "Run the relevant test or build command first.".into(),
+                step_id: Some("run-tests".into()),
+                tool: Some("run_command".into()),
+                arguments: Some(serde_json::json!({"command": "cargo", "args": ["test"]})),
+                verification: Some("Confirm exit_code is 0 before summarizing success.".into()),
+                rollback: Some(
+                    "No rollback is required for this read-only validation step.".into(),
+                ),
+                checkpoints: vec!["capture failing test output before edits".into()],
+                platform_hints: vec!["windows".into(), "linux".into()],
+                requires_confirmation: false,
+            }],
+            examples: vec!["Use when a Cargo workspace has failing tests.".into()],
+            lifecycle: SkillLifecycle::default(),
+        };
+
+        let json = serde_json::to_string(&skill).unwrap();
+        let back: SkillArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "rust-build-fix");
+        assert_eq!(back.steps.len(), 1);
+        assert_eq!(back.steps[0].step_id.as_deref(), Some("run-tests"));
+        assert_eq!(
+            back.steps[0].rollback.as_deref(),
+            Some("No rollback is required for this read-only validation step.")
+        );
+        assert_eq!(
+            back.steps[0].checkpoints,
+            vec!["capture failing test output before edits"]
+        );
+        assert_eq!(back.preferred_tools[0], "read_file");
+    }
+
+    #[test]
+    fn skill_artifact_summary_serde_roundtrip() {
+        let summary = SkillArtifactSummary {
+            name: "deploy-checklist".into(),
+            description: "Deployment checklist".into(),
+            intent_tags: vec!["Planning".into()],
+            domain_tags: vec!["deployment".into()],
+            step_count: 3,
+            version: 2,
+            status: SkillArtifactStatus::Reviewed,
+            usage_count: 4,
+            requires_operator_review: false,
+        };
+
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: SkillArtifactSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "deploy-checklist");
+        assert_eq!(back.step_count, 3);
+        assert_eq!(back.version, 2);
+        assert_eq!(back.status, SkillArtifactStatus::Reviewed);
+        assert_eq!(back.usage_count, 4);
+        assert!(!back.requires_operator_review);
+    }
+
+    #[test]
+    fn skill_lifecycle_serde_roundtrip() {
+        let lifecycle = SkillLifecycle {
+            version: 3,
+            status: SkillArtifactStatus::Approved,
+            created_at: Some("2026-03-14T00:00:00Z".into()),
+            updated_at: Some("2026-03-14T01:00:00Z".into()),
+            last_used_at: Some("2026-03-14T02:00:00Z".into()),
+            usage_count: 7,
+            execution_count: 2,
+            last_executed_at: Some("2026-03-14T02:30:00Z".into()),
+            last_checkpoint_at: Some("2026-03-14T02:31:00Z".into()),
+            last_execution_status: Some("completed".into()),
+            requires_operator_review: false,
+            reviewed_by: Some("ops-team".into()),
+            review_notes: vec!["Validated on staging.".into()],
+        };
+
+        let json = serde_json::to_string(&lifecycle).unwrap();
+        let back: SkillLifecycle = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.version, 3);
+        assert_eq!(back.status, SkillArtifactStatus::Approved);
+        assert_eq!(back.usage_count, 7);
+        assert_eq!(back.execution_count, 2);
+        assert_eq!(back.last_execution_status.as_deref(), Some("completed"));
+        assert_eq!(back.reviewed_by.as_deref(), Some("ops-team"));
+        assert!(!back.requires_operator_review);
     }
 
     // ─── flume_like::Sender tests ───

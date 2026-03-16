@@ -118,7 +118,7 @@ impl EpisodicMemory {
         user_id: &UserId,
         query: &str,
         limit: usize,
-        _token_budget: usize,
+        token_budget: usize,
     ) -> Result<Vec<EpisodicEntry>> {
         let conn = self
             .conn
@@ -214,8 +214,22 @@ impl EpisodicMemory {
                 .partial_cmp(&a.relevance_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        scored.truncate(limit);
-        Ok(scored)
+
+        let char_budget = token_budget.saturating_mul(4);
+        let mut total_chars = 0usize;
+        let mut trimmed = Vec::new();
+
+        for entry in scored.into_iter().take(limit) {
+            let entry_chars =
+                entry.content.len() + entry.summary.as_ref().map(|s| s.len()).unwrap_or(0);
+            if !trimmed.is_empty() && total_chars + entry_chars > char_budget {
+                break;
+            }
+            total_chars += entry_chars;
+            trimmed.push(entry);
+        }
+
+        Ok(trimmed)
     }
 
     /// Get recent entries for a user (for consolidation into semantic memory).

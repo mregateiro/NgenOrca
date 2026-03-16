@@ -37,6 +37,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::UserId;
+
 // ─── Task Classification ────────────────────────────────────────
 
 /// The kind of task a user message represents.
@@ -233,6 +235,29 @@ pub enum QualityMethod {
 
 // ─── Orchestration Record (for learning) ────────────────────────
 
+/// Correction-loop summary persisted with an orchestration record.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorrectionRecord {
+    pub tool_rounds: usize,
+    pub had_failures: bool,
+    pub had_blocked_calls: bool,
+    pub verification_attempted: bool,
+    pub grounded: bool,
+    pub remediation_attempted: bool,
+    pub remediation_succeeded: bool,
+    pub post_synthesis_verification_attempted: bool,
+    pub post_synthesis_drift_corrected: bool,
+}
+
+/// Synthesis summary persisted with an orchestration record.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SynthesisRecord {
+    pub attempted: bool,
+    pub succeeded: bool,
+    pub contradiction_score: f64,
+    pub conflicting_branches: usize,
+}
+
 /// A complete record of one orchestration cycle. Stored in Tier-2 episodic
 /// memory and consolidated into Tier-3 routing rules over time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,10 +272,18 @@ pub struct OrchestrationRecord {
     pub quality_method: QualityMethod,
     /// Whether escalation was needed.
     pub escalated: bool,
+    /// Canonical user attribution when known.
+    pub user_id: Option<UserId>,
+    /// Request channel or surface (web, websocket, telegram, etc.).
+    pub channel: Option<String>,
     /// Total latency in milliseconds.
     pub latency_ms: u64,
     /// Total tokens used across all models in this cycle.
     pub total_tokens: usize,
+    /// Correction-loop summary for verification/remediation behavior.
+    pub correction: CorrectionRecord,
+    /// Synthesis summary for delegated branch reconciliation.
+    pub synthesis: SynthesisRecord,
     /// Timestamp.
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
@@ -272,7 +305,7 @@ pub struct LearnedRoutingRule {
     pub target_agent: String,
     /// Confidence in this rule (0.0–1.0), based on historical success rate.
     pub confidence: f64,
-    /// How many successful cycles this rule is based on.
+    /// How many observed cycles this rule is based on.
     pub sample_count: u32,
     /// When this rule was last updated.
     pub last_updated: chrono::DateTime<chrono::Utc>,

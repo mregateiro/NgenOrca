@@ -394,7 +394,10 @@ mod tests {
         for (input, expected) in [
             ("openai/gpt-4o", "gpt-4o"),
             ("openrouter/meta-llama/llama-3", "meta-llama/llama-3"),
-            ("kilo/anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+            (
+                "kilo/anthropic/claude-sonnet-4.5",
+                "anthropic/claude-sonnet-4.5",
+            ),
             ("kilocode/openai/gpt-5", "openai/gpt-5"),
             ("azure/gpt-4", "gpt-4"),
             ("custom/my-model", "my-model"),
