@@ -217,11 +217,9 @@ pub async fn register_adapters(
                 .register_channel_adapter(Box::new(adapter), cfg_json)
                 .await?;
             info!("Teams adapter registered");
-            tracing::warn!(
-                "⚠ SEC-05: Teams webhook uses structural JWT validation only — \
-                     issuer/audience/signature are NOT verified. Deploy behind a \
-                     network firewall or Azure Front Door until full JWKS validation \
-                     is implemented (see teams.rs TODO)."
+            tracing::info!(
+                "SEC-05: Teams webhook uses full Bot Framework JWKS JWT validation \
+                     (issuer, audience, expiry, and RSA signature are verified)."
             );
         } else {
             tracing::warn!("Teams enabled but no app_id configured — skipping");

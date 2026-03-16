@@ -179,11 +179,14 @@ impl Transport {
 
     /// Get the Noise static public key bytes (for QR code generation).
     pub fn noise_public_key(&self) -> Vec<u8> {
-        // We need a sync version since this is called from sync context too.
-        // The noise handler's static key is set at construction time, so
-        // we can safely access it via a blocking lock.
         let noise = self.noise.blocking_lock();
         noise.static_public_key().as_bytes().to_vec()
+    }
+
+    /// Get the Noise static private key bytes (for credential persistence).
+    pub fn noise_private_key(&self) -> Vec<u8> {
+        let noise = self.noise.blocking_lock();
+        noise.static_private_key_bytes().to_vec()
     }
 
     /// Read the next binary WebSocket message.

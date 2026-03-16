@@ -54,6 +54,9 @@ pub struct NoiseHandler {
     /// Our ephemeral key pair (generated per handshake).
     ephemeral_secret: Option<X25519Secret>,
     ephemeral_public: Option<X25519Public>,
+    /// Server's ephemeral public key — captured during `process_server_hello`,
+    /// consumed during `build_client_finish` for the Noise XX `se` DH step.
+    server_ephemeral: Option<X25519Public>,
     /// Post-handshake send/receive cipher states.
     send_key: Option<[u8; 32]>,
     recv_key: Option<[u8; 32]>,
@@ -88,6 +91,7 @@ impl NoiseHandler {
             static_public: public,
             ephemeral_secret: None,
             ephemeral_public: None,
+            server_ephemeral: None,
             send_key: None,
             recv_key: None,
             send_counter: 0,
@@ -108,6 +112,11 @@ impl NoiseHandler {
     /// Our static public key.
     pub fn static_public_key(&self) -> &X25519Public {
         &self.static_public
+    }
+
+    /// Our static private key bytes — for credential persistence only.
+    pub fn static_private_key_bytes(&self) -> [u8; 32] {
+        self.static_secret.to_bytes()
     }
 
     // ── Handshake Phase ─────────────────────────────────────────
@@ -148,6 +157,8 @@ impl NoiseHandler {
 
         // Mix server ephemeral into h.
         self.mix_hash(server_ephemeral.as_bytes());
+        // Stash for the `se` DH in build_client_finish (Noise XX third step).
+        self.server_ephemeral = Some(server_ephemeral);
 
         // DH: ee (our ephemeral × server ephemeral).
         let eph_secret = self
@@ -196,20 +207,13 @@ impl NoiseHandler {
         let pub_bytes = self.static_public.as_bytes().to_vec();
         let static_enc = self.encrypt_and_hash(&pub_bytes)?;
 
-        // DH: se (our static × server ephemeral).
-        // We need the server's ephemeral key, which we mixed into h earlier.
-        // The server ephemeral is embedded in the handshake state implicitly
-        // via the chaining key. For the DH, we re-derive from our static secret
-        // and the server's ephemeral (we don't store it separately — the mix_key
-        // calls already incorporated it). However, to compute se properly,
-        // we need the server ephemeral bytes.
-        //
-        // In practice, we stored the server ephemeral when processing server_hello.
-        // For now, we skip the se DH since its contribution is already in the
-        // chaining key from the XX pattern's perspective via the symmetric state.
-        //
-        // TODO: For a fully correct implementation, store server_ephemeral and
-        // compute se = static_secret.diffie_hellman(&server_ephemeral).
+        // DH: se (our static × server ephemeral) — third step of Noise XX.
+        // `X25519Public` is `Copy`, so the `if let` copies it out of the Option
+        // without conflicting with the `&self.static_secret` borrow that follows.
+        if let Some(server_eph) = self.server_ephemeral {
+            let shared_se = self.static_secret.diffie_hellman(&server_eph);
+            self.mix_key(shared_se.as_bytes());
+        }
 
         // Encrypt the payload.
         let payload_enc = self.encrypt_and_hash(payload)?;

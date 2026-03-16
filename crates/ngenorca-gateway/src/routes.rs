@@ -659,13 +659,19 @@ async fn delete_user_data(
         }
     };
 
-    // Authorization: callers may only delete their own data.
-    // TODO: allow admin role to delete on behalf of others (IAM-01).
-    if caller_name != user_id {
+    // Authorization: callers may only delete their own data,
+    // unless they hold the Owner role (IAM-01: admin bypass).
+    let caller_is_owner = state
+        .identity()
+        .get_user(&ngenorca_core::types::UserId(caller_name.clone()))
+        .ok()
+        .and_then(|opt| opt)
+        .is_some_and(|u| u.role == UserRole::Owner);
+    if caller_name != user_id && !caller_is_owner {
         warn!(
             caller = %caller_name,
             target = %user_id,
-            "Unauthorized data deletion attempt — caller is not the target user"
+            "Unauthorized data deletion attempt — caller is not the target user and is not an Owner"
         );
         return (
             axum::http::StatusCode::FORBIDDEN,

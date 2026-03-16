@@ -178,9 +178,9 @@ impl WhatsAppClient {
         };
 
         // Build and emit QR code.
-        let noise_pub = {
+        let (noise_pub, noise_priv) = {
             let t = transport.lock().await;
-            t.noise_public_key()
+            (t.noise_public_key(), t.noise_private_key())
         };
         let qr = auth::build_qr_data(&qr_ref, &noise_pub, &keys.identity.public, &[0u8; 16]);
         let _ = self.event_tx.send(WhatsAppEvent::QrCode(qr.data));
@@ -207,7 +207,7 @@ impl WhatsAppClient {
                     jid: pair_data.jid.clone(),
                     device_id: pair_data.device_id,
                     client_id: vec![0u8; 16],
-                    noise_private: vec![0u8; 32], // TODO: extract from noise handler
+                    noise_private: noise_priv.clone(),
                     noise_public: noise_pub.clone(),
                     signal_keys: keys.clone(),
                     adv_secret: vec![],
