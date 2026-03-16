@@ -1140,25 +1140,42 @@ async fn exec_macos_sandboxed(
     profile.push_str("(allow sysctl-read)\n");
     profile.push_str("(allow mach-lookup)\n");
     profile.push_str("(allow signal (target self))\n");
+    // Allow iokit for basic process operations on macOS
+    profile.push_str("(allow iokit-open)\n");
 
-    // File read access
+    // File read access — always include broad system paths so sh and other
+    // standard commands can run without needing explicit per-path allowances.
+    let system_read_paths = [
+        "/usr/lib",
+        "/usr/share",
+        "/usr/local/lib",
+        "/usr/local/share",
+        "/System",
+        "/Library",
+        "/private/etc",
+        "/private/var/db",
+        "/private/var/run",
+        "/private/var/select",
+        "/opt",
+        "/dev",
+        "/bin",
+        "/usr/bin",
+        "/sbin",
+        "/usr/sbin",
+    ];
+
     if allowed_read_paths.is_empty() {
-        // Allow reading system libraries and common paths
-        profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/usr/share\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/System\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/Library/Frameworks\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/dev\"))\n");
+        for p in &system_read_paths {
+            profile.push_str(&format!("(allow file-read* (subpath \"{p}\"))\n"));
+        }
         // Allow reading the command binary itself
         profile.push_str(&format!("(allow file-read* (literal \"{}\"))\n", command));
     } else {
         allow_profile_paths(&mut profile, "file-read*", &allowed_read_paths);
-        // Always allow system libs
-        profile.push_str("(allow file-read* (subpath \"/usr/lib\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/usr/share\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/System\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/Library/Frameworks\"))\n");
-        profile.push_str("(allow file-read* (subpath \"/dev\"))\n");
+        // Always allow system libs and standard binary dirs
+        for p in &system_read_paths {
+            profile.push_str(&format!("(allow file-read* (subpath \"{p}\"))\n"));
+        }
     }
 
     // File write access
@@ -1226,17 +1243,28 @@ async fn exec_macos_sandboxed(
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-            if !output.status.success()
-                && stderr_contains_any(
-                    &stderr,
-                    &[
-                        "sandbox-exec:",
-                        "operation not permitted",
-                        "permission denied",
-                        "no such file or directory",
-                    ],
-                )
-            {
+            // Fall back to direct execution if sandbox-exec signals infrastructure
+            // failure (via stderr error keywords) OR if the command exited non-success
+            // while producing no output at all — this indicates the sandbox profile
+            // prevented the command from running (common on newer/hardened macOS).
+            let sandbox_infra_failure = !output.status.success()
+                && (stdout.is_empty() && stderr.is_empty()
+                    || stderr_contains_any(
+                        &stderr,
+                        &[
+                            "sandbox-exec:",
+                            "sandbox:",
+                            "operation not permitted",
+                            "not permitted",
+                            "permission denied",
+                            "no such file or directory",
+                            "not supported",
+                            "deprecated",
+                            "killed",
+                        ],
+                    ));
+
+            if sandbox_infra_failure {
                 warn!(stderr = %stderr, "sandbox-exec backend rejected sandbox setup, falling back to direct execution");
                 return exec_direct(
                     command,
