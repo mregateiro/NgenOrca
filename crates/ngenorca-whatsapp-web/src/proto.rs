@@ -365,6 +365,80 @@ pub fn build_client_payload_login(username: u64) -> Vec<u8> {
     payload.encode_to_vec()
 }
 
+// ─── Signal Message Wire Format ─────────────────────────────────
+
+/// Wire representation of a Signal Double Ratchet message inside a WhatsApp
+/// `<enc>` node.  Maps field-for-field to [`crate::signal::EncryptedMessage`].
+#[derive(Clone, PartialEq, Message)]
+pub struct SignalMessageProto {
+    /// Sender's current ratchet public key (32 bytes).
+    #[prost(bytes = "vec", optional, tag = "1")]
+    pub ratchet_key: Option<Vec<u8>>,
+    /// Message counter in the current sending chain.
+    #[prost(uint32, optional, tag = "2")]
+    pub counter: Option<u32>,
+    /// Length of the previous sending chain (for skipped-message key recovery).
+    #[prost(uint32, optional, tag = "3")]
+    pub previous_counter: Option<u32>,
+    /// AES-256-CBC encrypted payload bytes.
+    #[prost(bytes = "vec", optional, tag = "4")]
+    pub ciphertext: Option<Vec<u8>>,
+    /// Truncated HMAC-SHA256 authentication tag (8 bytes per Signal spec).
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub mac: Option<Vec<u8>>,
+}
+
+/// Encode a [`crate::signal::EncryptedMessage`] for use as the binary payload
+/// of a WhatsApp `<enc>` node.
+pub fn encode_signal_message(msg: &crate::signal::EncryptedMessage) -> Vec<u8> {
+    SignalMessageProto {
+        ratchet_key: Some(msg.ratchet_key.clone()),
+        counter: Some(msg.counter),
+        previous_counter: Some(msg.previous_counter),
+        ciphertext: Some(msg.ciphertext.clone()),
+        mac: Some(msg.mac.clone()),
+    }
+    .encode_to_vec()
+}
+
+/// Decode a binary `<enc>` node payload into a [`crate::signal::EncryptedMessage`].
+pub fn decode_signal_message(bytes: &[u8]) -> crate::Result<crate::signal::EncryptedMessage> {
+    let proto = SignalMessageProto::decode(bytes)
+        .map_err(|e| crate::Error::Proto(format!("decode signal message: {e}")))?;
+    Ok(crate::signal::EncryptedMessage {
+        ratchet_key: proto.ratchet_key.unwrap_or_default(),
+        counter: proto.counter.unwrap_or(0),
+        previous_counter: proto.previous_counter.unwrap_or(0),
+        ciphertext: proto.ciphertext.unwrap_or_default(),
+        mac: proto.mac.unwrap_or_default(),
+    })
+}
+
+/// Encode plain-text as a [`WaMessage`] protobuf — the cleartext that goes
+/// *into* `session.encrypt` before building a `<enc>` node.
+pub fn encode_wa_message(text: &str) -> Vec<u8> {
+    WaMessage {
+        conversation: Some(text.to_string()),
+        extended_text_message: None,
+    }
+    .encode_to_vec()
+}
+
+/// Decode a decrypted `<enc>` payload as a [`WaMessage`] and return the
+/// conversation text, or `None` if the payload is not a text message.
+pub fn decode_wa_message(bytes: &[u8]) -> Option<String> {
+    let msg = WaMessage::decode(bytes).ok()?;
+    if let Some(text) = msg.conversation
+        && !text.is_empty()
+    {
+        return Some(text);
+    }
+    if let Some(ext) = msg.extended_text_message {
+        return ext.text.filter(|t| !t.is_empty());
+    }
+    None
+}
+
 // ─── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]

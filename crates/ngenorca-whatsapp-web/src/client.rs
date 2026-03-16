@@ -274,12 +274,12 @@ impl WhatsAppClient {
     /// Handle an incoming WABinary node.
     async fn handle_incoming_node(
         event_tx: &mpsc::UnboundedSender<WhatsAppEvent>,
-        _store: &FileStore,
+        store: &FileStore,
         node: &WaNode,
     ) {
         match node.tag.as_str() {
             "message" => {
-                Self::handle_message_node(event_tx, node);
+                Self::handle_message_node(event_tx, store, node).await;
             }
             "receipt" | "ack" | "notification" => {
                 debug!(tag = %node.tag, "Received control node");
@@ -300,7 +300,11 @@ impl WhatsAppClient {
     }
 
     /// Extract a text message from a message node.
-    fn handle_message_node(event_tx: &mpsc::UnboundedSender<WhatsAppEvent>, node: &WaNode) {
+    async fn handle_message_node(
+        event_tx: &mpsc::UnboundedSender<WhatsAppEvent>,
+        store: &FileStore,
+        node: &WaNode,
+    ) {
         let from = node
             .attr("from")
             .or_else(|| node.attr("participant"))
@@ -309,10 +313,7 @@ impl WhatsAppClient {
         let message_id = node.attr("id").unwrap_or("").to_string();
         let timestamp: u64 = node.attr("t").and_then(|s| s.parse().ok()).unwrap_or(0);
 
-        // The message body is typically in a child node.
-        // In the E2E flow, it would be an encrypted Signal blob
-        // that we decrypt. For now, try to find plaintext content.
-        let text = Self::extract_text_from_node(node);
+        let text = Self::try_decrypt_or_extract_text(store, &from, node).await;
 
         if let Some(text) = text {
             info!(from = %from, len = text.len(), "Received message");
@@ -344,15 +345,81 @@ impl WhatsAppClient {
                         }
                     }
                     "enc" => {
-                        // Encrypted message — needs Signal decryption.
-                        // TODO: implement Signal decryption pipeline.
-                        debug!("Encrypted message node (enc) — decryption not yet implemented");
+                        // Encrypted nodes are handled by try_decrypt_or_extract_text.
                     }
                     _ => {}
                 }
                 // Recurse.
                 if let Some(t) = Self::extract_text_from_node(child) {
                     return Some(t);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Try to decrypt a Signal-encrypted `<enc>` node, falling back to plain-text
+    /// extraction for unencrypted message nodes.
+    async fn try_decrypt_or_extract_text(
+        store: &FileStore,
+        from: &str,
+        node: &WaNode,
+    ) -> Option<String> {
+        // 1. Fast path: cleartext extraction (handles legacy/unencrypted nodes).
+        if let Some(t) = Self::extract_text_from_node(node) {
+            return Some(t);
+        }
+
+        // 2. Look for <enc> children and attempt Signal decryption.
+        let children = match &node.content {
+            WaNodeContent::List(c) => c,
+            _ => return None,
+        };
+
+        for child in children {
+            if child.tag != "enc" {
+                continue;
+            }
+            let bytes = match &child.content {
+                WaNodeContent::Binary(b) => b,
+                _ => continue,
+            };
+
+            // Decode the Signal message from the enc payload bytes.
+            let enc_msg = match crate::proto::decode_signal_message(bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    debug!(from, error = %e, "Failed to decode enc node payload");
+                    continue;
+                }
+            };
+
+            // Load the Signal session for this sender.
+            let mut session = match store.load_session(from).await {
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    debug!(from, "No Signal session — cannot decrypt enc node");
+                    continue;
+                }
+                Err(e) => {
+                    warn!(from, error = %e, "Error loading Signal session");
+                    continue;
+                }
+            };
+
+            // Decrypt and advance the ratchet.
+            match session.decrypt(&enc_msg) {
+                Ok(plaintext) => {
+                    // Persist the updated ratchet state.
+                    if let Err(e) = store.save_session(from, &session).await {
+                        warn!(from, error = %e, "Failed to persist updated Signal session");
+                    }
+                    // Decode the WaMessage protobuf envelope and return the text.
+                    return crate::proto::decode_wa_message(&plaintext);
+                }
+                Err(e) => {
+                    warn!(from, error = %e, "Signal decryption failed for enc node");
                 }
             }
         }
@@ -371,38 +438,68 @@ impl WhatsAppClient {
         let msg_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..20].to_string();
         let timestamp = chrono::Utc::now().timestamp().to_string();
 
-        // Build the message node.
-        // In full implementation this would be Signal-encrypted.
-        // The WABinary message structure:
-        //   <message to="jid" type="text" id="..." t="timestamp">
-        //     <body>text</body>
-        //   </message>
-        let body_node = WaNode {
-            tag: "body".into(),
-            attrs: HashMap::new(),
-            content: WaNodeContent::Text(text.to_string()),
-        };
-
         let mut attrs = HashMap::new();
         attrs.insert("to".into(), jid.to_string());
         attrs.insert("type".into(), "text".into());
         attrs.insert("id".into(), msg_id.clone());
         attrs.insert("t".into(), timestamp);
 
-        let msg_node = WaNode {
-            tag: "message".into(),
-            attrs,
-            content: WaNodeContent::List(vec![body_node]),
+        let body_node = WaNode {
+            tag: "body".into(),
+            attrs: HashMap::new(),
+            content: WaNodeContent::Text(text.to_string()),
         };
 
-        // TODO: encrypt message body with Signal session for the recipient.
-        // For now we send the WABinary node; in a full implementation the
-        // body would be replaced with an <enc> node containing the encrypted
-        // Signal message.
+        // If a Signal session exists for the recipient, encrypt the body as an
+        // <enc type="msg"> node.  Otherwise fall back to a plaintext <body> node
+        // (server will reject this for E2E-enrolled contacts once X3DH session
+        // bootstrap is implemented).
+        let final_node = match self.store.load_session(jid).await {
+            Ok(Some(mut session)) => {
+                let proto_bytes = crate::proto::encode_wa_message(text);
+                match session.encrypt(&proto_bytes) {
+                    Ok(encrypted) => {
+                        if let Err(e) = self.store.save_session(jid, &session).await {
+                            warn!(to = jid, error = %e, "Failed to persist Signal session");
+                        }
+                        let ciphertext = crate::proto::encode_signal_message(&encrypted);
+                        let mut enc_attrs = HashMap::new();
+                        enc_attrs.insert("v".into(), "2".into());
+                        enc_attrs.insert("type".into(), "msg".into());
+                        let enc_child = WaNode {
+                            tag: "enc".into(),
+                            attrs: enc_attrs,
+                            content: WaNodeContent::Binary(ciphertext),
+                        };
+                        WaNode {
+                            tag: "message".into(),
+                            attrs,
+                            content: WaNodeContent::List(vec![enc_child]),
+                        }
+                    }
+                    Err(e) => {
+                        warn!(to = jid, error = %e, "Signal encrypt failed — falling back to plaintext");
+                        WaNode {
+                            tag: "message".into(),
+                            attrs,
+                            content: WaNodeContent::List(vec![body_node]),
+                        }
+                    }
+                }
+            }
+            _ => {
+                debug!(to = jid, "No Signal session — sending plaintext body");
+                WaNode {
+                    tag: "message".into(),
+                    attrs,
+                    content: WaNodeContent::List(vec![body_node]),
+                }
+            }
+        };
 
         {
             let t = transport.lock().await;
-            t.send_node(&msg_node).await?;
+            t.send_node(&final_node).await?;
         }
 
         debug!(to = jid, msg_id = %msg_id, "Sent text message");

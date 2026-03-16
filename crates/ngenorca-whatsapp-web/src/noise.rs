@@ -48,7 +48,6 @@ pub struct NoiseHandler {
     /// Encryption key during handshake.
     enc_key: [u8; 32],
     /// Our static key pair.
-    #[allow(dead_code)]
     static_secret: X25519Secret,
     static_public: X25519Public,
     /// Our ephemeral key pair (generated per handshake).
