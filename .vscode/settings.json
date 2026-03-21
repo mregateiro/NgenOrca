@@ -3,6 +3,7 @@
         "git commit": true,
         "git push": true,
         "cargo check": true,
-        "git -C .": true
+        "git -C .": true,
+        "cargo test": true
     }
 }

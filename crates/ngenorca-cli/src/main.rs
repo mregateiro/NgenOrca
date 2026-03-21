@@ -39,11 +39,11 @@ enum Commands {
     /// Start the NgenOrca gateway server.
     Gateway {
         /// Port to listen on.
-        #[arg(long, default_value = "18789")]
+        #[arg(long)]
         port: Option<u16>,
 
         /// Address to bind to.
-        #[arg(long, default_value = "127.0.0.1")]
+        #[arg(long)]
         bind: Option<String>,
     },
 
@@ -588,4 +588,43 @@ fn print_banner() {
     "#,
         env!("CARGO_PKG_VERSION")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn gateway_cli_does_not_override_config_when_bind_and_port_are_omitted() {
+        let cli = Cli::parse_from(["ngenorca", "gateway"]);
+
+        match cli.command {
+            Commands::Gateway { port, bind } => {
+                assert_eq!(port, None);
+                assert_eq!(bind, None);
+            }
+            _ => panic!("expected gateway command"),
+        }
+    }
+
+    #[test]
+    fn gateway_cli_still_accepts_explicit_bind_and_port_overrides() {
+        let cli = Cli::parse_from([
+            "ngenorca",
+            "gateway",
+            "--bind",
+            "0.0.0.0",
+            "--port",
+            "18789",
+        ]);
+
+        match cli.command {
+            Commands::Gateway { port, bind } => {
+                assert_eq!(port, Some(18789));
+                assert_eq!(bind.as_deref(), Some("0.0.0.0"));
+            }
+            _ => panic!("expected gateway command"),
+        }
+    }
 }

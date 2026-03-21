@@ -1,0 +1,124 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "gateway-contradiction-test",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-gateway",
+				"test_contradiction_scan",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "gateway-learned-routing-integration",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-gateway",
+				"orchestration_endpoint_reports_learned_route_diagnostics",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "gateway-learned-routing-filter-clear",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-gateway",
+				"learned_routes_endpoint_supports_filtering_and_clear",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "gateway-learned-routing-task-fit",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-gateway",
+				"task_lookup_prefers_tighter_complexity_fit_when_confidence_is_close",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "gateway-learned-routing-primary",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-gateway",
+				"test_route_with_learned_primary_without_sub_agents",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "plugin-sdk-diagnostics-serde",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-plugin-sdk",
+				"orchestration_diagnostics_plan_serde_roundtrip",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "plugin-sdk-diagnostics-serde-retry",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-q",
+				"-p",
+				"ngenorca-plugin-sdk",
+				"orchestration_diagnostics_plan_serde_roundtrip",
+				"--target-dir",
+				"target/copilot-validation-task",
+				"--",
+				"--nocapture"
+			],
+			"isBackground": false
+		}
+	]
+}

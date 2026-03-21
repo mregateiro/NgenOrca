@@ -1,0 +1,23 @@
+Implement X3DH first-message session bootstrap for WhatsApp Web
+
+When send_text finds no Signal session for a recipient it now:
+1. Sends an IQ "get" stanza (xmlns=encrypt) to s.whatsapp.net
+   requesting the recipient's pre-key bundle.
+2. Routes the IQ result back through a oneshot channel registered
+   in a new iq_waiters map — safe against races with the background
+   recv loop which also calls recv_node.
+3. Parses the response (identity, skey, optional OPK) into a
+   PreKeyBundle and calls Session::from_prekey_bundle (X3DH).
+4. Encrypts the pending message with the new session and falls back
+   to plaintext only if the bootstrap itself fails.
+
+Changes:
+- client.rs: add iq_waiters field + oneshot import
+- client.rs: spawn_recv_loop threads iq_waiters into handle_incoming_node
+- client.rs: handle_incoming_node routes IQ result/error to waiters
+- client.rs: PreKeyBundle struct + parse_prekey_bundle_response + find_user_node
+- client.rs: fetch_prekey_bundle async method
+- client.rs: bootstrap_signal_session async helper
+- client.rs: send_text _ => arm replaced with X3DH bootstrap + encrypt
+
+All 45 unit tests pass; fmt and clippy -D warnings clean.
