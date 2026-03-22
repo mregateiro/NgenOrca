@@ -2515,8 +2515,7 @@ mod tests {
 
     #[test]
     fn load_config_bind_from_toml_files() {
-        let dir =
-            std::env::temp_dir().join(format!("ngenorca_bind_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ngenorca_bind_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         // Config file with explicit bind = "0.0.0.0"

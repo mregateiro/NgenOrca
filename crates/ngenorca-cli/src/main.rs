@@ -133,6 +133,24 @@ async fn main() -> anyhow::Result<()> {
                 config.gateway.bind = b;
             }
 
+            // Log config source diagnostics so operators can trace where values came from.
+            {
+                let system_cfg = ngenorca_config::default_system_config_path();
+                tracing::info!(
+                    user_config = %config_path_str,
+                    user_config_exists = config_path.exists(),
+                    system_config = %system_cfg.display(),
+                    system_config_exists = system_cfg.exists(),
+                    "Config sources"
+                );
+                if let Ok(val) = std::env::var("NGENORCA_GATEWAY__BIND") {
+                    tracing::warn!(
+                        env_override = %val,
+                        "NGENORCA_GATEWAY__BIND environment variable overrides config file"
+                    );
+                }
+            }
+
             print_banner();
             ngenorca_gateway::start(config, config_path).await?;
         }
