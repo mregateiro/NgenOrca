@@ -4,3 +4,8 @@
 *.db-shm
 .env
 config/secrets.toml
+
+# Debug / CI artifact files
+/*.log
+/*.txt
+/tmp/

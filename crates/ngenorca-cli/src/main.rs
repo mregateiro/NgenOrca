@@ -379,14 +379,18 @@ fn run_onboard_wizard(config_path: Option<&str>) -> anyhow::Result<()> {
         .interact()?;
 
     let (provider_name, default_model, needs_key) = match provider_idx {
-        0 => ("ollama",     "ollama/llama3.1:8b",                         false),
-        1 => ("anthropic",  "anthropic/claude-sonnet-4-20250514",         true),
-        2 => ("openai",     "openai/gpt-4o-mini",                         true),
-        3 => ("openrouter", "openrouter/meta-llama/llama-3.3-70b-instruct", true),
-        4 => ("gemini",     "gemini/gemini-2.0-flash",                    true),
-        5 => ("groq",       "groq/llama-3.3-70b-versatile",               true),
-        6 => ("mistral",    "mistral/mistral-large-latest",               true),
-        _ => ("ollama",     "ollama/llama3.1:8b",                         false),
+        0 => ("ollama", "ollama/llama3.1:8b", false),
+        1 => ("anthropic", "anthropic/claude-sonnet-4-20250514", true),
+        2 => ("openai", "openai/gpt-4o-mini", true),
+        3 => (
+            "openrouter",
+            "openrouter/meta-llama/llama-3.3-70b-instruct",
+            true,
+        ),
+        4 => ("gemini", "gemini/gemini-2.0-flash", true),
+        5 => ("groq", "groq/llama-3.3-70b-versatile", true),
+        6 => ("mistral", "mistral/mistral-large-latest", true),
+        _ => ("ollama", "ollama/llama3.1:8b", false),
     };
 
     let model: String = Input::new()
@@ -611,12 +615,7 @@ mod tests {
     #[test]
     fn gateway_cli_still_accepts_explicit_bind_and_port_overrides() {
         let cli = Cli::parse_from([
-            "ngenorca",
-            "gateway",
-            "--bind",
-            "0.0.0.0",
-            "--port",
-            "18789",
+            "ngenorca", "gateway", "--bind", "0.0.0.0", "--port", "18789",
         ]);
 
         match cli.command {
