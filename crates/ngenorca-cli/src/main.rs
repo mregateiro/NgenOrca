@@ -1,7 +1,7 @@
 //! NgenOrca CLI — the main entry point.
 //!
 //! Usage:
-//!   ngenorca gateway [--port 18789] [--bind 127.0.0.1] [--verbose]
+//!   ngenorca gateway [--port 18789] [--bind 0.0.0.0] [--verbose]
 //!   ngenorca status
 //!   ngenorca onboard
 //!   ngenorca identity list
@@ -445,7 +445,7 @@ fn run_onboard_wizard(config_path: Option<&str>) -> anyhow::Result<()> {
 
     let bind: String = Input::new()
         .with_prompt("   Bind address")
-        .default("127.0.0.1".into())
+        .default("0.0.0.0".into())
         .interact_text()?;
 
     // ── Step 4: Channels ────────────────────────────────────────
