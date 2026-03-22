@@ -483,7 +483,7 @@ The gateway is NgenOrca's front door — it serves the HTTP API, WebSocket conne
 
 ```toml
 [gateway]
-bind = "127.0.0.1"             # Listen address ("0.0.0.0" to expose to network)
+bind = "0.0.0.0"               # Listen address ("127.0.0.1" to restrict to loopback)
 port = 18789                   # Port number
 auth_mode = "None"             # None | Password | Token | Certificate
 
