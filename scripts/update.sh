@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# If invoked via `sh update.sh`, re-exec with bash so bash-specific options work.
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
 set -euo pipefail
 
 MODE="${1:-docker}"
