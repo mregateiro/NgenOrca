@@ -11,7 +11,7 @@
 
 # ── Gateway ──────────────────────────────────────────────────────
 [gateway]
-bind = "127.0.0.1"                 # "0.0.0.0" to expose to network
+bind = "0.0.0.0"                   # "127.0.0.1" to restrict to loopback
 port = 18789
 
 # Authentication mode:

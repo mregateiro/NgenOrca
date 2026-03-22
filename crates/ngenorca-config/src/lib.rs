@@ -1141,7 +1141,7 @@ pub struct ObservabilityConfig {
 // ─── Default value functions ────────────────────────────────────
 
 fn default_bind() -> String {
-    "127.0.0.1".into()
+    "0.0.0.0".into()
 }
 fn default_port() -> u16 {
     18789
@@ -1912,7 +1912,7 @@ mod tests {
     #[test]
     fn default_config_has_expected_bind_and_port() {
         let cfg = NgenOrcaConfig::default();
-        assert_eq!(cfg.gateway.bind, "127.0.0.1");
+        assert_eq!(cfg.gateway.bind, "0.0.0.0");
         assert_eq!(cfg.gateway.port, 18789);
     }
 
