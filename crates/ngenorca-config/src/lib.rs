@@ -2512,4 +2512,45 @@ mod tests {
         let errs = cfg.validate().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("max_tokens")));
     }
+
+    #[test]
+    fn load_config_bind_from_toml_files() {
+        let dir =
+            std::env::temp_dir().join(format!("ngenorca_bind_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Config file with explicit bind = "0.0.0.0"
+        let f1 = dir.join("explicit.toml");
+        std::fs::write(&f1, "[gateway]\nbind = \"0.0.0.0\"\nport = 18789\n").unwrap();
+        let cfg1 = load_config(Some(f1.to_str().unwrap())).unwrap();
+        assert_eq!(cfg1.gateway.bind, "0.0.0.0", "explicit 0.0.0.0 in TOML");
+
+        // Config file WITHOUT bind field — should use code default
+        let f2 = dir.join("no_bind.toml");
+        std::fs::write(&f2, "[gateway]\nport = 18789\n").unwrap();
+        let cfg2 = load_config(Some(f2.to_str().unwrap())).unwrap();
+        assert_eq!(
+            cfg2.gateway.bind, "0.0.0.0",
+            "missing bind should default to 0.0.0.0"
+        );
+
+        // No [gateway] section at all
+        let f3 = dir.join("no_gateway.toml");
+        std::fs::write(&f3, "[agent]\nmodel = \"test/model\"\n").unwrap();
+        let cfg3 = load_config(Some(f3.to_str().unwrap())).unwrap();
+        assert_eq!(
+            cfg3.gateway.bind, "0.0.0.0",
+            "no [gateway] section should default to 0.0.0.0"
+        );
+
+        // Nonexistent file — should still use defaults
+        let f4 = dir.join("nonexistent.toml");
+        let cfg4 = load_config(Some(f4.to_str().unwrap())).unwrap();
+        assert_eq!(
+            cfg4.gateway.bind, "0.0.0.0",
+            "nonexistent file should default to 0.0.0.0"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
