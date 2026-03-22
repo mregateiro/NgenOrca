@@ -24,7 +24,8 @@ migrate_config() {
   # v0.1.3: default bind address changed from 127.0.0.1 → 0.0.0.0
   # so the gateway is reachable from outside the host.
   if grep -qE '^bind\s*=\s*"127\.0\.0\.1"' "$file"; then
-    sed -i 's/^bind\s*=\s*"127\.0\.0\.1"/bind = "0.0.0.0"/' "$file"
+    sed -i.bak 's/^bind[[:space:]]*=[[:space:]]*"127\.0\.0\.1"/bind = "0.0.0.0"/' "$file"
+    rm -f "${file}.bak"
     changed=true
   fi
 
